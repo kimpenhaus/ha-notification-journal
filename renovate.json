@@ -46,5 +46,6 @@
       "pinDigests": true
     }
   ],
-  "dependencyDashboardTitle": "Dependency Dashboard"
+  "dependencyDashboardTitle": "Dependency Dashboard",
+  "rebaseWhen": "behind-base-branch"
 }
