@@ -47,11 +47,6 @@ jobs:
         run: |
           scripts/package.sh "${TAG#v}"
           gh release upload "${TAG}" notification_journal.zip --clobber
-      - name: Remove the pre-releases of this version
-        if: ${{ needs.release-please.outputs.created == 'true' }}
-        run: |
-          gh release list --limit 100 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease) | .tagName' |
-            while read -r tag; do gh release delete "${tag}" --cleanup-tag --yes; done
 
   beta:
     # A tag v<version>-beta.<n> becomes a pre-release of that version; release-please leaves these tags alone.
