@@ -28,6 +28,7 @@ export {
   mdiMenu,
   mdiMessageBadgeOutline,
   mdiOpenInNew,
+  mdiPuzzleOutline,
   mdiRefresh,
   mdiRobotOutline,
   mdiScriptTextOutline,

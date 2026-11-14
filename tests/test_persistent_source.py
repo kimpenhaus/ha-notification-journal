@@ -4,7 +4,7 @@ from homeassistant.auth.models import User
 from homeassistant.components import persistent_notification
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import MockConfigEntry, MockModule, mock_integration
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
 from custom_components.notification_journal import RuntimeData
@@ -61,6 +61,20 @@ async def test_created_by_home_assistant_itself(hass: HomeAssistant) -> None:
     (record,) = await _records(entry.runtime_data)
     assert record.origin.kind is OriginKind.SYSTEM
     assert record.source_ref == "config_entry_discovery"
+
+
+async def test_created_by_a_custom_integration_names_it(hass: HomeAssistant) -> None:
+    mock_integration(hass, MockModule("parcel_tracker", partial_manifest={"name": "Parcel Tracker"}))
+    entry = await _setup(hass)
+    namespace: dict = {}
+    code = "def create(hass, async_create):\n    async_create(hass, 'Parcel delivered', None, 'parcel')\n"
+    exec(compile(code, "/config/custom_components/parcel_tracker/__init__.py", "exec"), namespace)
+
+    namespace["create"](hass, persistent_notification.async_create)
+    await hass.async_block_till_done()
+
+    (record,) = await _records(entry.runtime_data)
+    assert (record.origin.kind, record.origin.name) == (OriginKind.INTEGRATION, "Parcel Tracker")
 
 
 async def test_dismissing_records_when_and_by_whom(hass: HomeAssistant, hass_admin_user: User) -> None:

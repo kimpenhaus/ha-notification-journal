@@ -143,15 +143,25 @@ async def test_filters(store: NotificationStore) -> None:
 async def test_group_by_origin_sorts_within_each_origin(store: NotificationStore) -> None:
     alarm = Origin(kind=OriginKind.AUTOMATION, entity_id="automation.alarm", name="Alarm")
     by_hand = Origin(kind=OriginKind.USER, user_id="someone")
+    weather = Origin(kind=OriginKind.INTEGRATION, name="Weather Coach", integration="weather_coach")
+    tracker = Origin(kind=OriginKind.INTEGRATION, name="Parcel Tracker", integration="parcel_tracker")
     store.add(_record("garage-old", "a", [], age=timedelta(minutes=5)))
     store.add(_record("alarm", "b", [], age=timedelta(minutes=4), origin=alarm))
     store.add(_record("hand", "c", [], age=timedelta(minutes=3), origin=by_hand))
+    store.add(_record("weather", "e", [], age=timedelta(minutes=3), origin=weather))
+    store.add(_record("tracker", "f", [], age=timedelta(minutes=3), origin=tracker))
     store.add(_record("garage-new", "d", [], age=timedelta(minutes=2)))
     await store.async_flush()
 
     page = await store.async_query(Query(group_by_origin=True))
-    assert [r.id for r in page.records] == ["alarm", "garage-new", "garage-old", "hand"]
-    assert page.groups == {"automation.alarm": 1, "automation.garage": 2, "user": 1}
+    assert [r.id for r in page.records] == ["alarm", "garage-new", "garage-old", "tracker", "weather", "hand"]
+    assert page.groups == {
+        "automation.alarm": 1,
+        "automation.garage": 2,
+        "integration.parcel_tracker": 1,
+        "integration.weather_coach": 1,
+        "user": 1,
+    }
     ascending = await _ids(store, group_by_origin=True, newest_first=False, limit=2, offset=1)
     assert ascending == ["garage-old", "garage-new"]
     assert (await store.async_query(Query())).groups is None

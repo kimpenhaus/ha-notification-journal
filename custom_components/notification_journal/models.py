@@ -38,6 +38,7 @@ class OriginKind(StrEnum):
     AUTOMATION = "automation"
     SCRIPT = "script"
     USER = "user"
+    INTEGRATION = "integration"
     SYSTEM = "system"
     UNKNOWN = "unknown"
 
@@ -55,7 +56,7 @@ class Recipient:
 
 @dataclass(slots=True)
 class Origin:
-    """The automation, script or user that sent a notification."""
+    """The automation, script, user or integration that sent a notification."""
 
     kind: OriginKind
     entity_id: str | None = None
@@ -63,6 +64,7 @@ class Origin:
     trace_key: str | None = None
     run_id: str | None = None
     user_id: str | None = None
+    integration: str | None = None
 
 
 @dataclass(slots=True)
