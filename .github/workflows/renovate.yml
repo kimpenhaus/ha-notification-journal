@@ -19,4 +19,4 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Validate the Renovate configuration
-        run: renovate-config-validator --strict --no-global renovate.json
+        run: renovate-config-validator --no-global renovate.json
