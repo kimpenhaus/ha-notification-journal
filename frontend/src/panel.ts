@@ -45,6 +45,7 @@ import type {
 } from "./types";
 
 const PAGE_SIZE = 50;
+const ARCHIVE_BATCH = 200;
 const SEARCH_DELAY = 300;
 const PERIODS: Record<Exclude<Period, "">, number> = { day: 1, week: 7, month: 30, quarter: 90 };
 const STATUSES: Status[] = ["sent", "delivered", "failed", "dismissed", "replaced"];
@@ -272,15 +273,14 @@ export class NotificationJournalPanel extends LitElement {
         if (!fresh.length) {
           // A record that arrived meanwhile shifted the offsets; what the server counts is already loaded.
           this._total = this._records.length;
-          this._groups = page.groups ?? this._groups;
           return;
         }
       } else {
         this._records = page.records;
         this._pending = 0;
       }
-      this._total = page.total;
-      this._groups = page.groups ?? {};
+      if (page.total !== undefined) this._total = page.total;
+      if (page.groups !== undefined || !more) this._groups = page.groups ?? {};
       this._error = undefined;
     } catch (error) {
       if (request !== this._request) return;
@@ -318,15 +318,17 @@ export class NotificationJournalPanel extends LitElement {
       this._records = this._records.map((known, position) => (position === index ? record : known));
     } else if (change === "added" && !this._archived) {
       if (this._unfiltered && this._complete) {
+        const first = this._records[0];
         this._records = [record, ...this._records];
         this._total += 1;
-        this._arrange();
+        const inPlace = this._view === "time" && this._filters.newestFirst && (!first || record.time >= first.time);
+        if (!inPlace) this._arrange();
       } else {
         this._pending += 1;
       }
+      window.clearTimeout(this._facetsTimer);
+      this._facetsTimer = window.setTimeout(() => void this._loadFacets(), 2000);
     }
-    window.clearTimeout(this._facetsTimer);
-    this._facetsTimer = window.setTimeout(() => void this._loadFacets(), 2000);
   }
 
   private _removed(recordId: string): void {
@@ -349,10 +351,10 @@ export class NotificationJournalPanel extends LitElement {
     if (!ids.length) return;
     this._notice = undefined;
     try {
-      for (let start = 0; start < ids.length; start += PAGE_SIZE) {
+      for (let start = 0; start < ids.length; start += ARCHIVE_BATCH) {
         await this._hass!.connection.sendMessagePromise({
           type: "notification_journal/archive",
-          record_ids: ids.slice(start, start + PAGE_SIZE),
+          record_ids: ids.slice(start, start + ARCHIVE_BATCH),
           archived: !this._archived,
         });
       }

@@ -119,6 +119,8 @@ class Query:
     archived: bool = False
     limit: int = 50
     offset: int = 0
+    with_counts: bool = True
+    """Count the matches (and per origin); a further page of the same list needs no counts."""
 
 
 @dataclass(slots=True)
@@ -126,7 +128,7 @@ class Page:
     """One page of records and the number of all that match."""
 
     records: list[NotificationRecord]
-    total: int
+    total: int | None
     groups: dict[str, int] | None = None
 
 
@@ -459,15 +461,18 @@ class NotificationStore:
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         order = "DESC" if query.newest_first else "ASC"
         db = self._db()
-        total = db.execute(f"SELECT count(*) FROM notifications {clause}", params).fetchone()[0]
+        total = None
+        if query.with_counts:
+            total = db.execute(f"SELECT count(*) FROM notifications {clause}", params).fetchone()[0]
         groups = None
         sort = f"time {order}, rowid {order}"
         if query.group_by_origin:
-            groups = dict(
-                db.execute(
-                    f"SELECT {ORIGIN_GROUP}, count(*) FROM notifications {clause} GROUP BY {ORIGIN_GROUP}", params
-                ).fetchall()
-            )
+            if query.with_counts:
+                groups = dict(
+                    db.execute(
+                        f"SELECT {ORIGIN_GROUP}, count(*) FROM notifications {clause} GROUP BY {ORIGIN_GROUP}", params
+                    ).fetchall()
+                )
             sort = f"origin_entity_id IS NULL, origin_entity_id, origin_kind, {sort}"
         rows = db.execute(
             f"SELECT * FROM notifications {clause} ORDER BY {sort} LIMIT ? OFFSET ?",

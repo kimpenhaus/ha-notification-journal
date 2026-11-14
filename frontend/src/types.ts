@@ -48,7 +48,7 @@ export interface NotificationRecord {
 
 export interface Page {
   records: NotificationRecord[];
-  total: number;
+  total?: number;
   groups?: Record<string, number>;
 }
 

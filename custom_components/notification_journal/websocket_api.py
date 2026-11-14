@@ -6,7 +6,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
@@ -50,10 +50,17 @@ def _store_and_scope(
     return entry.runtime_data.store, user.id
 
 
-def serialize(hass: HomeAssistant, record: NotificationRecord) -> dict[str, Any]:
+def _people(hass: HomeAssistant) -> dict[str, State]:
+    return {state.entity_id: state for state in hass.states.async_all("person")}
+
+
+def serialize(
+    hass: HomeAssistant, record: NotificationRecord, people: dict[str, State] | None = None
+) -> dict[str, Any]:
     """Return a record as the panel uses it: people with their current name and picture, and the path to its trace."""
     result = record.as_dict()
-    people = {state.entity_id: state for state in hass.states.async_all("person")}
+    if people is None:
+        people = _people(hass)
     for recipient in [*result["recipients"], *(r for call in result["inner_calls"] for r in call["recipients"])]:
         if recipient["kind"] == RecipientKind.PERSON and (state := people.get(recipient["id"])):
             recipient["name"] = state.name
@@ -105,9 +112,13 @@ async def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
             archived=msg["archived"],
             limit=msg["limit"],
             offset=msg["offset"],
+            with_counts=msg["offset"] == 0,
         )
     )
-    result: dict[str, Any] = {"records": [serialize(hass, r) for r in page.records], "total": page.total}
+    people = _people(hass)
+    result: dict[str, Any] = {"records": [serialize(hass, r, people) for r in page.records]}
+    if page.total is not None:
+        result["total"] = page.total
     if page.groups is not None:
         result["groups"] = page.groups
     connection.send_result(msg["id"], result)
