@@ -22,7 +22,7 @@
 
 - Code, comments, documentation, issues and commits in English; every user-facing text through translations with `en` and `de`.
 - Built for any Home Assistant installation: no names, entity IDs or addresses of a particular home in code, defaults or tests; test data and screenshots (`scripts/screenshots/`) are made up.
-- `README.md` is for users (what it does, installation, options, privacy); how it is built, tested and released goes into `docs/DEVELOPMENT.md`. Its section *How this project was made* is wanted by the maintainer and stays.
+- `README.md` is for users (what it does, installation, options, privacy); how it is built, tested and released goes into `docs/DEVELOPMENT.md`. Its section *How this project was made* is wanted by the maintainer and stays. The Marketplace in Home Assistant shows it outside GitHub, so images and links in it are absolute URLs (`raw.githubusercontent.com` for images, `github.com/…/blob/main/` for files).
 - Log at `warning` and above for what a user has to act on; routine operation logs at `debug`.
 - Only add a comment when the reader cannot derive it from the code.
 - The panel uses the theme's CSS variables and the `hass` object only, no internal `ha-*` components of the Home Assistant frontend apart from `ha-icon` with a fallback; its texts live in `frontend/src/localize.ts` with `en` and `de`.
