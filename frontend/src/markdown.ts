@@ -7,7 +7,7 @@ export function navigate(path: string): void {
   window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } }));
 }
 
-function followInternal(event: MouseEvent): void {
+export function followInternal(event: MouseEvent): void {
   if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return;
   const href = (event.currentTarget as HTMLAnchorElement).getAttribute("href");
   if (!href) return;

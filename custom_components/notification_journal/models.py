@@ -97,9 +97,14 @@ class NotificationRecord:
     status_by: Origin | None = None
 
     @property
+    def all_recipients(self) -> list[Recipient]:
+        """The recipients, those the calls of a group reached included."""
+        return [*self.recipients, *(r for call in self.inner_calls for r in call.recipients)]
+
+    @property
     def user_ids(self) -> set[str]:
         """The users among the recipients, the calls of a group included; EVERYONE for the bell and announcements."""
-        recipients = [*self.recipients, *(r for call in self.inner_calls for r in call.recipients)]
+        recipients = self.all_recipients
         users = {r.user_id for r in recipients if r.user_id}
         if any(r.kind in (RecipientKind.EVERYONE, RecipientKind.SPEAKER) for r in recipients):
             users.add(EVERYONE)

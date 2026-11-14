@@ -26,8 +26,8 @@ import {
   mdiSwapHorizontal,
 } from "./icons";
 import { countText, type Localize } from "./localize";
-import { inline, navigate } from "./markdown";
-import type { NotificationRecord, Origin, Recipient, Status } from "./types";
+import { followInternal, inline } from "./markdown";
+import type { NotificationRecord, Origin, OriginKind, Recipient, Status } from "./types";
 
 const BELL = "persistent_notification";
 const SPEECH = "speech";
@@ -38,6 +38,22 @@ const STATUS_ICONS: Record<Status, string> = {
   dismissed: mdiBellCheckOutline,
   replaced: mdiSwapHorizontal,
 };
+
+const ORIGIN_ICONS: Record<OriginKind, string> = {
+  automation: mdiRobotOutline,
+  script: mdiScriptTextOutline,
+  user: mdiAccountOutline,
+  system: mdiHomeAssistant,
+  unknown: mdiHelpCircleOutline,
+};
+
+/** The icon of an origin: the automation's or script's own icon if it has one, else the one of its kind. */
+export function originGlyph(origin: Origin, originIcons: Map<string, string>): TemplateResult {
+  const own = origin.entity_id ? originIcons.get(origin.entity_id) : undefined;
+  return own && customElements.get("ha-icon")
+    ? html`<ha-icon .icon=${own}></ha-icon>`
+    : icon(ORIGIN_ICONS[origin.kind]);
+}
 
 const DEVICE_ICONS: Partial<Record<Recipient["kind"], string>> = {
   channel: mdiCellphone,
@@ -193,23 +209,11 @@ export class NotificationJournalRecord extends LitElement {
     const origin = this.record.origin;
     const localize = this.localize;
     if (origin.kind === "automation" || origin.kind === "script") {
-      const own = origin.entity_id ? this.originIcons.get(origin.entity_id) : undefined;
-      const glyph =
-        own && customElements.get("ha-icon")
-          ? html`<ha-icon .icon=${own}></ha-icon>`
-          : icon(origin.kind === "automation" ? mdiRobotOutline : mdiScriptTextOutline);
-      const label = html`${glyph} <span>${origin.name ?? origin.entity_id ?? localize(`origin_${origin.kind}`)}</span>`;
+      const label = html`${originGlyph(origin, this.originIcons)}
+        <span>${origin.name ?? origin.entity_id ?? localize(`origin_${origin.kind}`)}</span>`;
       const path = this.record.trace_path;
       if (this.admin && path) {
-        return html`<a
-          class="chip origin link"
-          href=${path}
-          title=${localize("open_trace")}
-          @click=${(event: MouseEvent) => {
-            if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return;
-            event.preventDefault();
-            navigate(path);
-          }}
+        return html`<a class="chip origin link" href=${path} title=${localize("open_trace")} @click=${followInternal}
           >${label}${icon(mdiOpenInNew)}</a
         >`;
       }
@@ -218,13 +222,17 @@ export class NotificationJournalRecord extends LitElement {
     if (origin.kind === "user") {
       const name = origin.user_id ? this.userNames.get(origin.user_id) : undefined;
       return html`<span class="chip origin"
-        >${icon(mdiAccountOutline)}${name ? localize("origin_user", { name }) : localize("origin_user_unknown")}</span
+        >${originGlyph(origin, this.originIcons)}${name ? localize("origin_user", { name }) : localize("origin_user_unknown")}</span
       >`;
     }
     if (origin.kind === "system") {
-      return html`<span class="chip origin">${icon(mdiHomeAssistant)}${localize("origin_system")}</span>`;
+      return html`<span class="chip origin"
+        >${originGlyph(origin, this.originIcons)}${localize("origin_system")}</span
+      >`;
     }
-    return html`<span class="chip origin muted">${icon(mdiHelpCircleOutline)}${localize("origin_unknown")}</span>`;
+    return html`<span class="chip origin muted"
+      >${originGlyph(origin, this.originIcons)}${localize("origin_unknown")}</span
+    >`;
   }
 
   private _route(): TemplateResult {

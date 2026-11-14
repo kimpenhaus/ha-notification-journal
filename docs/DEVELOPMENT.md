@@ -45,7 +45,7 @@ The panel reads the journal through these commands. An administrator sees every 
 |---------|---------|
 | `notification_journal/list` | `records` and `total`; filters `text` (full-text, prefix match), `channel` (action or group), `origin` (automation or script entity), `status`, `since`, `until`, `user_id` (administrators only), `newest_first`, `group_by: origin` (sorted by origin, then time; adds `groups`, the number per origin), `archived` (the caller's archive instead of the active view), `limit` (≤ 200), `offset` |
 | `notification_journal/get` | one record by `record_id` with its data, the calls a group made and `trace_path`, the link to the exact run of the automation or script |
-| `notification_journal/facets` | the channels, groups and origins that occur, for administrators also the people |
+| `notification_journal/facets` | `origins`: the automations and scripts that sent notifications the caller may see, for the origin filter |
 | `notification_journal/subscribe` | an event `{change: added \| updated, record}` for every new or changed notification the caller may see, `{change: removed, record_id}` for a deleted one |
 | `notification_journal/archive` | archives `record_ids` (≤ 200) for the caller, or restores them with `archived: false`; only the caller's view changes, a user who is no administrator only archives what they may see; returns `changed` |
 | `notification_journal/delete` | deletes one notification by `record_id` for every recipient; administrators only, not used by the panel |

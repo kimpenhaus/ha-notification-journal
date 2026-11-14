@@ -57,14 +57,10 @@ export type View = "time" | "origin";
 export interface FacetOption {
   id: string;
   name: string;
-  picture?: string | null;
 }
 
 export interface Facets {
-  channels: FacetOption[];
-  groups: FacetOption[];
   origins: FacetOption[];
-  people: FacetOption[];
 }
 
 export type RecordEvent =

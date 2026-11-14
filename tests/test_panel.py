@@ -10,9 +10,15 @@ from pytest_homeassistant_custom_component.typing import ClientSessionGenerator,
 
 from custom_components.notification_journal import panel
 from custom_components.notification_journal.const import (
+    CONF_MAX_ENTRIES,
     CONF_NON_ADMIN_VISIBILITY,
     CONF_PANEL_ICON,
     CONF_PANEL_TITLE,
+    CONF_RECORD_NOTIFY,
+    CONF_RECORD_PERSISTENT,
+    CONF_RECORD_SPEECH,
+    CONF_RECORD_TELEGRAM,
+    CONF_RETENTION_DAYS,
     CONF_SHOW_IN_SIDEBAR,
     DEFAULT_OPTIONS,
     DOMAIN,
@@ -88,8 +94,18 @@ async def test_panel_takes_title_and_icon_from_the_options(
 async def test_changed_options_apply_without_restart(hass: HomeAssistant, hass_ws_client: WebSocketGenerator) -> None:
     entry = await _setup(hass)
 
-    hass.config_entries.async_update_entry(
-        entry, options={**entry.options, CONF_SHOW_IN_SIDEBAR: False, CONF_PANEL_TITLE: "Mitteilungen"}
+    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        flow["flow_id"],
+        {
+            "sources": {
+                key: True
+                for key in (CONF_RECORD_NOTIFY, CONF_RECORD_PERSISTENT, CONF_RECORD_SPEECH, CONF_RECORD_TELEGRAM)
+            },
+            "retention": {CONF_RETENTION_DAYS: 90, CONF_MAX_ENTRIES: 100000},
+            "access": {CONF_NON_ADMIN_VISIBILITY: "own"},
+            "sidebar": {CONF_SHOW_IN_SIDEBAR: False, CONF_PANEL_TITLE: "Mitteilungen"},
+        },
     )
     await hass.async_block_till_done()
 
