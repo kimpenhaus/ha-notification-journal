@@ -131,3 +131,17 @@ async def test_option_turns_speech_off(hass: HomeAssistant) -> None:
     await _speak(hass, "media_player.kitchen")
 
     assert await _records(runtime) == []
+
+
+async def test_data_that_json_cannot_hold_becomes_text(hass: HomeAssistant) -> None:
+    runtime = await _setup(hass)
+
+    await hass.services.async_call(
+        "tts",
+        "speak",
+        {"entity_id": "tts.cloud", "media_player_entity_id": "media_player.kitchen", "message": "Hi", "options": {1}},
+        blocking=True,
+    )
+
+    (record,) = await _records(runtime)
+    assert record.data == {"options": "{1}"}

@@ -190,3 +190,22 @@ async def test_backup_pause_holds_writes_until_resumed(store: NotificationStore,
     store.resume_after_backup()
 
     assert await _ids(store) == ["during", "before"]
+
+
+async def test_search_ignores_words_without_letters_or_digits(store: NotificationStore) -> None:
+    store.add(_record("a", "Garage door open", [ANNA]))
+    await store.async_flush()
+
+    assert await _ids(store, text="Garage - door") == ["a"]
+    assert await _ids(store, text="&") == ["a"]
+
+
+async def test_purge_tells_listeners(store: NotificationStore) -> None:
+    changes: list[tuple[str, str]] = []
+    store.async_add_listener(lambda change, record_id: changes.append((change, record_id)))
+    store.add(_record("old", "Old", [ANNA], age=timedelta(days=40)))
+    await store.async_flush()
+    changes.clear()
+
+    assert await store.async_purge(30, 1000) == 1
+    assert changes == [("purged", "")]

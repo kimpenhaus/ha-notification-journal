@@ -14,7 +14,7 @@ from ..models import NotificationRecord, Recipient, RecipientKind
 from ..origin import resolve_origin
 from ..recipients import entity_group_members
 from ..store import NotificationStore
-from . import TARGET_KEYS, as_list
+from . import TARGET_KEYS, as_list, plain
 
 TTS_DOMAIN = "tts"
 SATELLITE_DOMAIN = "assist_satellite"
@@ -66,7 +66,7 @@ class SpeechSource:
                 channel=channel,
                 title=None,
                 message=message,
-                data=extra or None,
+                data=plain(extra) if extra else None,
                 recipients=[self._recipient(entity_id) for entity_id in speakers],
                 origin=resolve_origin(self._hass, event.context),
                 context_id=event.context.id,

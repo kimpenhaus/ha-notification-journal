@@ -16,7 +16,7 @@ from ..models import NotificationRecord, Recipient, RecipientKind
 from ..origin import resolve_origin
 from ..recipients import NOTIFY_DOMAIN
 from ..store import NotificationStore
-from . import TARGET_KEYS, as_list
+from . import TARGET_KEYS, as_list, plain
 
 TELEGRAM_DOMAIN = "telegram_bot"
 TEXT_FIELDS = {
@@ -73,7 +73,7 @@ class TelegramSource:
                 channel=channel,
                 title=data.get(ATTR_TITLE),
                 message=message,
-                data=extra or None,
+                data=plain(extra) if extra else None,
                 recipients=chats,
                 origin=resolve_origin(self._hass, event.context),
                 context_id=event.context.id,

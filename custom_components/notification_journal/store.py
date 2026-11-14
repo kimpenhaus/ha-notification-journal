@@ -131,7 +131,7 @@ class Page:
 
 
 def _fts_query(text: str) -> str | None:
-    terms = ['"' + term.replace('"', '""') + '"*' for term in text.split()]
+    terms = ['"' + term.replace('"', '""') + '"*' for term in text.split() if any(ch.isalnum() for ch in term)]
     return " AND ".join(terms) or None
 
 
@@ -223,7 +223,10 @@ class NotificationStore:
     async def async_purge(self, retention_days: int, max_entries: int) -> int:
         """Delete records older than the retention and beyond the maximum number; return how many."""
         cutoff = (dt_util.utcnow() - timedelta(days=retention_days)).timestamp()
-        return await self._run(self._purge, cutoff, max_entries)
+        removed = await self._run(self._purge, cutoff, max_entries)
+        if removed:
+            self._notify("purged", "")
+        return removed
 
     async def async_pause_for_backup(self) -> None:
         """Write the WAL into the database file and hold every further access until resumed."""
@@ -302,6 +305,7 @@ class NotificationStore:
                 connection.rollback()
                 raise
             _LOGGER.info("Migrated %s to schema version %s", self._path, step)
+        connection.executescript(SCHEMA)
 
     def _close(self) -> None:
         if self._connection is not None:

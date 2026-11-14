@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 from homeassistant.const import EVENT_CALL_SERVICE
 from homeassistant.core import Context, HomeAssistant, ServiceCall
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -223,3 +225,58 @@ async def test_other_domains_are_ignored(hass: HomeAssistant) -> None:
     await hass.services.async_call("light", "turn_on", {}, blocking=True)
 
     assert await _records(runtime) == []
+
+
+async def test_notify_group_entity_attaches_its_member_call(hass: HomeAssistant) -> None:
+    runtime = await _setup(hass)
+    hass.states.async_set("notify.kitchen_display", "unknown", {"friendly_name": "Kitchen display"})
+    hass.states.async_set("notify.hall_display", "unknown", {"friendly_name": "Hall display"})
+    hass.states.async_set(
+        "notify.displays", "unknown", {"entity_id": ["notify.kitchen_display", "notify.hall_display"]}
+    )
+    context = Context()
+
+    for entity_ids in (["notify.displays"], ["notify.kitchen_display", "notify.hall_display"]):
+        hass.bus.async_fire(
+            EVENT_CALL_SERVICE,
+            {
+                "domain": "notify",
+                "service": "send_message",
+                "service_data": {"entity_id": entity_ids, "message": "Rain"},
+            },
+            context=context,
+        )
+    await hass.async_block_till_done()
+
+    record = await _only(runtime)
+    assert record.group == "notify.displays"
+    assert [call.channel for call in record.inner_calls] == ["notify.kitchen_display", "notify.hall_display"]
+    assert [[r.name for r in call.recipients] for call in record.inner_calls] == [["Kitchen display"], ["Hall display"]]
+
+
+async def test_send_message_to_an_area(hass: HomeAssistant) -> None:
+    runtime = await _setup(hass)
+    kitchen = ar.async_get(hass).async_create("Kitchen")
+    registry = er.async_get(hass)
+    display = registry.async_get_or_create("notify", "demo", "display", suggested_object_id="kitchen_display")
+    registry.async_update_entity(display.entity_id, area_id=kitchen.id)
+    hass.states.async_set(display.entity_id, "unknown", {"friendly_name": "Kitchen display"})
+
+    hass.bus.async_fire(
+        EVENT_CALL_SERVICE,
+        {"domain": "notify", "service": "send_message", "service_data": {"area_id": kitchen.id, "message": "Tea"}},
+    )
+    await hass.async_block_till_done()
+
+    record = await _only(runtime)
+    assert record.channel == display.entity_id
+    assert record.data is None
+
+
+async def test_excluded_group_drops_its_member_calls_too(hass: HomeAssistant, phones: list) -> None:
+    runtime = await _setup(hass, **{CONF_EXCLUDED_CHANNELS: ["notify.family"]})
+
+    await hass.services.async_call("notify", "family", {"message": "Dinner"}, blocking=True)
+    await hass.services.async_call("notify", "phone_ben", {"message": "Direct"}, blocking=True)
+
+    assert [r.message for r in await _records(runtime)] == ["Direct"]
