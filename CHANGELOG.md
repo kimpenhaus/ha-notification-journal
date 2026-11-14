@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/kimpenhaus/ha-notification-journal/compare/v0.1.0...v0.2.0) (2026-11-14)
+
+
+### Features
+
+* name the integration that sent a notification ([#35](https://github.com/kimpenhaus/ha-notification-journal/issues/35)) ([3f01578](https://github.com/kimpenhaus/ha-notification-journal/commit/3f01578870553c74bf7a3e4be52a5df90ab21853))
+* show answers to notification buttons ([#37](https://github.com/kimpenhaus/ha-notification-journal/issues/37)) ([58a603a](https://github.com/kimpenhaus/ha-notification-journal/commit/58a603ad22ab440847f917947d17a973236b9269))
+
+
+### Reverts
+
+* use absolute urls for images and links ([#40](https://github.com/kimpenhaus/ha-notification-journal/issues/40)) ([79a2657](https://github.com/kimpenhaus/ha-notification-journal/commit/79a2657deafe5711546f978c8c3d620579940d57))
+
 ## 0.1.0 (2026-11-14)
 
 The first release of Notification Journal: a journal of every notification your Home Assistant sends, in a sidebar panel.
