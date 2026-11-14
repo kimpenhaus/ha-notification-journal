@@ -33,7 +33,9 @@ jobs:
 
   renovate:
     runs-on: ubuntu-latest
-    container: renovate/renovate:44.228.0
+    container:
+      image: renovate/renovate:44.228.0
+      options: --user root
     steps:
       - uses: actions/checkout@v7
       - name: Validate the Renovate configuration
