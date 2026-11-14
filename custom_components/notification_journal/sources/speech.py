@@ -7,20 +7,16 @@ from typing import Any
 from homeassistant.const import ATTR_ENTITY_ID, EVENT_CALL_SERVICE
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import target
-from homeassistant.util import dt as dt_util
-from homeassistant.util.ulid import ulid_now
 
-from ..models import NotificationRecord, Recipient, RecipientKind
-from ..origin import resolve_origin
-from ..recipients import entity_group_members
+from ..models import RecipientKind
+from ..recipients import entity_group_members, entity_recipient
 from ..store import NotificationStore
-from . import TARGET_KEYS, as_list, plain
+from . import ATTR_MESSAGE, TARGET_KEYS, as_list, new_record
 
 TTS_DOMAIN = "tts"
 SATELLITE_DOMAIN = "assist_satellite"
 MEDIA_PLAYER_DOMAIN = "media_player"
 SERVICES = {(TTS_DOMAIN, "speak"): MEDIA_PLAYER_DOMAIN, (SATELLITE_DOMAIN, "announce"): SATELLITE_DOMAIN}
-ATTR_MESSAGE = "message"
 ATTR_MEDIA_PLAYERS = "media_player_entity_id"
 
 
@@ -58,18 +54,10 @@ class SpeechSource:
         if not speakers or self._excluded.intersection({channel, *speakers}):
             return
         extra = {key: value for key, value in data.items() if key not in ignored}
+        recipients = [entity_recipient(self._hass, entity_id, RecipientKind.SPEAKER) for entity_id in speakers]
         self._store.add(
-            NotificationRecord(
-                id=ulid_now(),
-                time=dt_util.utcnow(),
-                source=self.name,
-                channel=channel,
-                title=None,
-                message=message,
-                data=plain(extra) if extra else None,
-                recipients=[self._recipient(entity_id) for entity_id in speakers],
-                origin=resolve_origin(self._hass, event.context),
-                context_id=event.context.id,
+            new_record(
+                self._hass, event, source=self.name, channel=channel, message=message, data=extra, recipients=recipients
             )
         )
 
@@ -89,10 +77,6 @@ class SpeechSource:
             elif entity_id.startswith(f"{domain}."):
                 found.append(entity_id)
         return found
-
-    def _recipient(self, entity_id: str) -> Recipient:
-        state = self._hass.states.get(entity_id)
-        return Recipient(kind=RecipientKind.SPEAKER, id=entity_id, name=state.name if state else entity_id)
 
 
 @callback

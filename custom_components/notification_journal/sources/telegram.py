@@ -9,14 +9,11 @@ from homeassistant.const import EVENT_CALL_SERVICE
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import target
-from homeassistant.util import dt as dt_util
-from homeassistant.util.ulid import ulid_now
 
-from ..models import NotificationRecord, Recipient, RecipientKind
-from ..origin import resolve_origin
-from ..recipients import NOTIFY_DOMAIN
+from ..models import Recipient, RecipientKind
+from ..recipients import NOTIFY_DOMAIN, entity_recipient
 from ..store import NotificationStore
-from . import TARGET_KEYS, as_list, plain
+from . import ATTR_TITLE, TARGET_KEYS, as_list, new_record
 
 TELEGRAM_DOMAIN = "telegram_bot"
 TEXT_FIELDS = {
@@ -28,7 +25,6 @@ TEXT_FIELDS = {
     "send_document": "caption",
     "send_poll": "question",
 }
-ATTR_TITLE = "title"
 ATTR_CHAT_ID = "chat_id"
 ATTR_CONFIG_ENTRY_ID = "config_entry_id"
 
@@ -66,17 +62,15 @@ class TelegramSource:
         ignored = {text_field, ATTR_TITLE, ATTR_CHAT_ID, ATTR_CONFIG_ENTRY_ID, *TARGET_KEYS}
         extra = {key: value for key, value in data.items() if key not in ignored}
         self._store.add(
-            NotificationRecord(
-                id=ulid_now(),
-                time=dt_util.utcnow(),
+            new_record(
+                self._hass,
+                event,
                 source=self.name,
                 channel=channel,
                 title=data.get(ATTR_TITLE),
                 message=message,
-                data=plain(extra) if extra else None,
+                data=extra,
                 recipients=chats,
-                origin=resolve_origin(self._hass, event.context),
-                context_id=event.context.id,
             )
         )
 
@@ -88,10 +82,7 @@ class TelegramSource:
         )
         for entity_id in sorted(selected.referenced | selected.indirectly_referenced):
             if entity_id.startswith(f"{NOTIFY_DOMAIN}."):
-                state = self._hass.states.get(entity_id)
-                found[entity_id] = Recipient(
-                    kind=RecipientKind.CHAT, id=entity_id, name=state.name if state else entity_id
-                )
+                found[entity_id] = entity_recipient(self._hass, entity_id, RecipientKind.CHAT)
         chat_ids = {int(chat_id) for chat_id in as_list(data.get(ATTR_CHAT_ID))}
         if (chat_ids or not found) and (entry := self._entry(data.get(ATTR_CONFIG_ENTRY_ID))) is not None:
             subentries = list(entry.subentries.values())

@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlowWithReload
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers import selector
@@ -56,7 +56,7 @@ class NotificationJournalConfigFlow(ConfigFlow, domain=DOMAIN):
         return NotificationJournalOptionsFlow()
 
 
-class NotificationJournalOptionsFlow(OptionsFlow):
+class NotificationJournalOptionsFlow(OptionsFlowWithReload):
     """Change what is recorded and for how long; the form groups the options in sections, they are stored flat."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

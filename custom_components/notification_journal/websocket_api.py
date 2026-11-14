@@ -141,21 +141,11 @@ async def ws_get(hass: HomeAssistant, connection: websocket_api.ActiveConnection
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/facets", vol.Optional("user_id"): str})
 @websocket_api.async_response
 async def ws_facets(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
-    """Return what the filters can offer: channels, groups, origins and, for administrators, people."""
+    """Return what the filters can offer: the automations and scripts that sent notifications."""
     if (scope := _store_and_scope(hass, connection, msg)) is None:
         return
     store, user_id = scope
-    facets: dict[str, Any] = await store.async_facets(user_id)
-    facets["people"] = (
-        [
-            {"id": state.attributes["user_id"], "name": state.name, "picture": state.attributes.get("entity_picture")}
-            for state in hass.states.async_all("person")
-            if state.attributes.get("user_id")
-        ]
-        if connection.user.is_admin
-        else []
-    )
-    connection.send_result(msg["id"], facets)
+    connection.send_result(msg["id"], await store.async_facets(user_id))
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/subscribe"})

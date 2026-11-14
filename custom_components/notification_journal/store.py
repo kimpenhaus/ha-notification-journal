@@ -138,8 +138,7 @@ def _fts_query(text: str) -> str | None:
 
 
 def _people(record: NotificationRecord) -> str:
-    recipients = [*record.recipients, *(r for call in record.inner_calls for r in call.recipients)]
-    return " ".join(sorted({r.name for r in recipients}))
+    return " ".join(sorted({r.name for r in record.all_recipients}))
 
 
 class NotificationStore:
@@ -211,7 +210,7 @@ class NotificationStore:
         return await self._run(self._open_records, source)
 
     async def async_facets(self, user_id: str | None) -> dict[str, list[dict[str, str | None]]]:
-        """Return the channels, groups and origins that occur, limited to a user's records if given."""
+        """Return the automations and scripts that sent notifications, limited to a user's records if given."""
         return await self._run(self._facets, user_id)
 
     async def async_get(self, record_id: str) -> NotificationRecord | None:
@@ -483,23 +482,16 @@ class NotificationStore:
     def _facets(self, user_id: str | None) -> dict[str, list[dict[str, str | None]]]:
         where = f"WHERE {VISIBLE_TO_USER} AND" if user_id else "WHERE"
         params = [user_id] if user_id else []
-        db = self._db()
-        channels = db.execute(
-            f"SELECT DISTINCT channel FROM notifications {where} grp IS NULL ORDER BY channel", params
-        ).fetchall()
-        groups = db.execute(
-            f"SELECT DISTINCT grp FROM notifications {where} grp IS NOT NULL ORDER BY grp", params
-        ).fetchall()
-        origins = db.execute(
-            f"SELECT origin_entity_id, json_extract(origin, '$.name') FROM notifications {where} "
-            "origin_entity_id IS NOT NULL GROUP BY origin_entity_id ORDER BY 2",
-            params,
-        ).fetchall()
-        return {
-            "channels": [{"id": row[0], "name": row[0]} for row in channels],
-            "groups": [{"id": row[0], "name": row[0]} for row in groups],
-            "origins": [{"id": row[0], "name": row[1]} for row in origins],
-        }
+        origins = (
+            self._db()
+            .execute(
+                f"SELECT origin_entity_id, json_extract(origin, '$.name') FROM notifications {where} "
+                "origin_entity_id IS NOT NULL GROUP BY origin_entity_id ORDER BY 2",
+                params,
+            )
+            .fetchall()
+        )
+        return {"origins": [{"id": row[0], "name": row[1]} for row in origins]}
 
     def _purge(self, cutoff: float, max_entries: int) -> int:
         db = self._db()

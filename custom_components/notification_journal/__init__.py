@@ -91,7 +91,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
         icon=options.get(CONF_PANEL_ICON),
     )
     entry.async_on_unload(lambda: async_remove_panel(hass))
-    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
 
@@ -150,8 +149,3 @@ def _start(
 def _stop(runtime: RuntimeData) -> None:
     while runtime.stop:
         runtime.stop.pop()()
-
-
-async def _async_options_updated(hass: HomeAssistant, entry: NotificationJournalConfigEntry) -> None:
-    """Reload the entry so changed options take effect."""
-    await hass.config_entries.async_reload(entry.entry_id)

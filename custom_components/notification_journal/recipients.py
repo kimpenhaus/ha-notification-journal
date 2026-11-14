@@ -81,6 +81,12 @@ def entity_group_members(hass: HomeAssistant, entity_id: str) -> list[str] | Non
     return list(members) if isinstance(members, list | tuple) else None
 
 
+def entity_recipient(hass: HomeAssistant, entity_id: str, kind: RecipientKind) -> Recipient:
+    """Return an entity as a recipient, named as Home Assistant shows it."""
+    state = hass.states.get(entity_id)
+    return Recipient(kind=kind, id=entity_id, name=state.name if state else entity_id)
+
+
 class RecipientResolver:
     """Turn notify actions and notify entities into recipients."""
 
@@ -124,8 +130,7 @@ class RecipientResolver:
             user_id = config_entry.data.get(ATTR_USER_ID) if config_entry else None
             if config_entry and config_entry.domain == MOBILE_APP_DOMAIN and user_id in people:
                 return [people[user_id]]
-        state = self._hass.states.get(entity_id)
-        return [Recipient(kind=RecipientKind.ENTITY, id=entity_id, name=state.name if state else entity_id)]
+        return [entity_recipient(self._hass, entity_id, RecipientKind.ENTITY)]
 
     def _mobile_app_entry(self, service: str) -> ConfigEntry | None:
         for platform, notify_service in _legacy_services(self._hass):

@@ -4,7 +4,6 @@ import { repeat } from "lit/directives/repeat.js";
 import { type Clock, dayKey, dayLabel } from "./format";
 import {
   icon,
-  mdiAccountOutline,
   mdiArchiveArrowDownOutline,
   mdiArchiveArrowUpOutline,
   mdiArchiveOutline,
@@ -13,15 +12,12 @@ import {
   mdiChevronDown,
   mdiClose,
   mdiFilterRemoveOutline,
-  mdiHelpCircleOutline,
-  mdiHomeAssistant,
   mdiInboxOutline,
   mdiMagnify,
   mdiMenu,
   mdiMessageBadgeOutline,
   mdiRefresh,
   mdiRobotOutline,
-  mdiScriptTextOutline,
   mdiSelectAll,
   mdiSelectRemove,
   mdiSortClockAscendingOutline,
@@ -30,7 +26,7 @@ import {
   mdiUnfoldMoreHorizontal,
 } from "./icons";
 import { countText, type Localize, localizer } from "./localize";
-import "./record";
+import { originGlyph } from "./record";
 import type {
   Facets,
   Filters,
@@ -48,7 +44,7 @@ const PAGE_SIZE = 50;
 const ARCHIVE_BATCH = 200;
 const SEARCH_DELAY = 300;
 const PERIODS: Record<Exclude<Period, "">, number> = { day: 1, week: 7, month: 30, quarter: 90 };
-const STATUSES: Status[] = ["sent", "delivered", "failed", "dismissed", "replaced"];
+const STATUSES: Status[] = ["sent", "dismissed", "replaced"];
 const DEFAULT_FILTERS: Filters = {
   text: "",
   status: "",
@@ -160,7 +156,7 @@ export class NotificationJournalPanel extends LitElement {
     this.narrow = false;
     this._records = [];
     this._total = 0;
-    this._facets = { channels: [], groups: [], origins: [], people: [] };
+    this._facets = { origins: [] };
     this._filters = { ...DEFAULT_FILTERS, newestFirst: stored(ORDER_KEY) !== "false" };
     this._view = stored(VIEW_KEY) === "origin" ? "origin" : "time";
     this._groups = {};
@@ -804,26 +800,16 @@ export class NotificationJournalPanel extends LitElement {
     originIcons: Map<string, string>,
   ): TemplateResult {
     const origin = record.origin;
-    const own = origin.entity_id ? originIcons.get(origin.entity_id) : undefined;
     let name: string;
-    let fallback: string;
     if (origin.kind === "automation" || origin.kind === "script") {
       const state = origin.entity_id ? this._hass?.states[origin.entity_id] : undefined;
       name = String(
         state?.attributes.friendly_name ?? origin.name ?? origin.entity_id ?? localize(`origin_${origin.kind}`),
       );
-      fallback = origin.kind === "automation" ? mdiRobotOutline : mdiScriptTextOutline;
-    } else if (origin.kind === "user") {
-      name = localize("origin_by_hand");
-      fallback = mdiAccountOutline;
-    } else if (origin.kind === "system") {
-      name = localize("origin_system");
-      fallback = mdiHomeAssistant;
     } else {
-      name = localize("origin_unknown");
-      fallback = mdiHelpCircleOutline;
+      name = localize(origin.kind === "user" ? "origin_by_hand" : `origin_${origin.kind}`);
     }
-    const glyph = own && customElements.get("ha-icon") ? html`<ha-icon .icon=${own}></ha-icon>` : icon(fallback);
+    const glyph = originGlyph(origin, originIcons);
     const section = `group-${key}`;
     const collapsed = this._collapsed.has(section);
     return html`<button

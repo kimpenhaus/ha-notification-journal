@@ -10,11 +10,8 @@ from typing import Any
 from homeassistant.const import ATTR_ENTITY_ID, EVENT_CALL_SERVICE
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import target
-from homeassistant.util import dt as dt_util
-from homeassistant.util.ulid import ulid_now
 
 from ..models import Call, NotificationRecord, Recipient
-from ..origin import resolve_origin
 from ..recipients import (
     NOTIFY_DOMAIN,
     SEND_MESSAGE,
@@ -23,10 +20,8 @@ from ..recipients import (
     legacy_group_members,
 )
 from ..store import NotificationStore
-from . import TARGET_KEYS, as_list, plain
+from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, as_list, new_record
 
-ATTR_MESSAGE = "message"
-ATTR_TITLE = "title"
 GROUP_CALL_WINDOW = 5.0
 
 
@@ -131,17 +126,15 @@ class NotifySource:
     ) -> NotificationRecord:
         recipients = self._recipients(service, channels)
         extra = {key: value for key, value in data.items() if key not in (ATTR_MESSAGE, ATTR_TITLE, *TARGET_KEYS)}
-        return NotificationRecord(
-            id=ulid_now(),
-            time=dt_util.utcnow(),
+        return new_record(
+            self._hass,
+            event,
             source=self.name,
             channel=", ".join(channels),
             title=data.get(ATTR_TITLE),
             message=str(data.get(ATTR_MESSAGE, "")),
-            data=plain(extra) if extra else None,
+            data=extra,
             recipients=recipients,
-            origin=resolve_origin(self._hass, event.context),
-            context_id=event.context.id,
             group=group,
         )
 

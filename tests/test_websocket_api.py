@@ -156,14 +156,10 @@ async def test_facets(
     hass.states.async_set("person.ben", "home", {"user_id": hass_read_only_user.id, "friendly_name": "Ben"})
 
     admin = (await _call(await hass_ws_client(hass), type=f"{DOMAIN}/facets"))["result"]
-    assert admin["channels"] == [{"id": "notify.phone", "name": "notify.phone"}]
-    assert admin["groups"] == [{"id": "notify.family", "name": "notify.family"}]
-    assert admin["origins"] == [{"id": "automation.garage", "name": "Garage door"}]
-    assert admin["people"] == [{"id": hass_read_only_user.id, "name": "Ben", "picture": None}]
+    assert admin == {"origins": [{"id": "automation.garage", "name": "Garage door"}]}
 
     reader = (await _call(await hass_ws_client(hass, hass_read_only_access_token), type=f"{DOMAIN}/facets"))["result"]
-    assert reader["people"] == []
-    assert reader["groups"] == [{"id": "notify.family", "name": "notify.family"}]
+    assert reader == {"origins": [{"id": "automation.garage", "name": "Garage door"}]}
 
 
 async def test_subscribe_sends_new_and_changed_records(

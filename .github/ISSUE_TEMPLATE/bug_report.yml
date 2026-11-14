@@ -43,5 +43,5 @@ body:
     id: logs
     attributes:
       label: Logs
-      description: Entries for `custom_components.notification_journal` from Settings → System → Logs, with debug logging enabled for the integration if possible.
+      description: Errors and tracebacks that mention `notification_journal` from Settings → System → Logs (show the full logs).
       render: text
