@@ -31,6 +31,14 @@ jobs:
         working-directory: frontend
         run: npm ci --no-audit --no-fund && npm run check && npm run build
 
+  renovate:
+    runs-on: ubuntu-latest
+    container: renovate/renovate:44.228.0
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate the Renovate configuration
+        run: renovate-config-validator --strict --no-global renovate.json
+
   hassfest:
     runs-on: ubuntu-latest
     steps:
