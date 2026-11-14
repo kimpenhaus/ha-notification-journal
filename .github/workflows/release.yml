@@ -26,10 +26,11 @@ jobs:
 
   archive:
     needs: release-please
-    # A release by release-please (it raises no release event of its own) or one made by hand, e.g. a pre-release.
+    # A release by release-please (it raises no release event of its own) or one made by hand.
     if: ${{ always() && (needs.release-please.outputs.created == 'true' || github.event_name == 'release') }}
     runs-on: ubuntu-latest
     env:
+      GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.release-please.outputs.tag || github.event.release.tag_name }}
     steps:
       - uses: actions/checkout@v7
@@ -42,13 +43,49 @@ jobs:
         working-directory: frontend
         run: npm ci --no-audit --no-fund && npm run build
       - name: Attach the integration to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          test -s custom_components/notification_journal/frontend/panel.js
-          manifest=custom_components/notification_journal/manifest.json
-          jq --arg version "${TAG#v}" '.version = $version' "${manifest}" > manifest.tmp && mv manifest.tmp "${manifest}"
-          cd custom_components/notification_journal
-          zip -r -q ../../notification_journal.zip . -x '__pycache__/*'
-          cd ../..
+          scripts/package.sh "${TAG#v}"
           gh release upload "${TAG}" notification_journal.zip --clobber
+      - name: Remove the pre-releases of this version
+        if: ${{ needs.release-please.outputs.created == 'true' }}
+        run: |
+          gh release list --limit 100 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease) | .tagName' |
+            while read -r tag; do gh release delete "${tag}" --cleanup-tag --yes; done
+
+  beta:
+    needs: release-please
+    # Every push to main that leaves a release pending becomes a pre-release of that version; it replaces the previous one.
+    if: ${{ github.event_name == 'push' && needs.release-please.outputs.created != 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Next version
+        id: next
+        run: |
+          title="$(gh pr list --label 'autorelease: pending' --state open --json title --jq '.[0].title // ""')"
+          version="$(printf '%s\n' "${title}" | sed -n 's/^.* release \([0-9][0-9A-Za-z.+-]*\)$/\1/p')"
+          if [ -z "${version}" ]; then
+            echo "No release pending, so no pre-release."
+          else
+            echo "tag=v${version}-beta.${GITHUB_RUN_NUMBER}" >> "${GITHUB_OUTPUT}"
+          fi
+      - if: ${{ steps.next.outputs.tag }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26
+      - name: Build the panel
+        if: ${{ steps.next.outputs.tag }}
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Publish the pre-release
+        if: ${{ steps.next.outputs.tag }}
+        env:
+          TAG: ${{ steps.next.outputs.tag }}
+        run: |
+          scripts/package.sh "${TAG#v}"
+          gh release create "${TAG}" notification_journal.zip --prerelease --target "${GITHUB_SHA}" \
+            --title "${TAG}" --notes "Pre-release of the next version, built from ${GITHUB_SHA}. Not for general use."
+          gh release list --limit 100 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease) | .tagName' |
+            { grep -vx "${TAG}" || true; } | while read -r tag; do gh release delete "${tag}" --cleanup-tag --yes; done
