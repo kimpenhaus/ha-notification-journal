@@ -1,0 +1,47 @@
+name: Bug report
+description: Something does not work as described.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Please leave out personal data such as names, addresses and the texts of real notifications; replace them with made-up ones.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: source
+    attributes:
+      label: Source
+      options:
+        - notify action
+        - Home Assistant's notifications (the bell)
+        - Speech announcement
+        - Telegram
+        - Panel only
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: "2026.11.1"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Notification Journal version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Entries for `custom_components.notification_journal` from Settings → System → Logs, with debug logging enabled for the integration if possible.
+      render: text
