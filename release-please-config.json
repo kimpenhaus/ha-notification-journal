@@ -13,7 +13,8 @@
           "path": "custom_components/notification_journal/manifest.json",
           "jsonpath": "$.version"
         }
-      ]
+      ],
+      "initial-version": "0.1.0"
     }
   }
 }
