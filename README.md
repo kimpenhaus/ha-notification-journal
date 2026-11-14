@@ -4,7 +4,7 @@ A Home Assistant integration that keeps a journal of every notification your hom
 
 Home Assistant forgets a notification the moment it is sent. Notification Journal records it as it goes out, without changing your automations, and keeps it searchable.
 
-<img src="docs/screenshots/timeline-light.png" alt="Notification Journal in the light theme" width="640">
+<img src="https://raw.githubusercontent.com/kimpenhaus/ha-notification-journal/main/docs/screenshots/timeline-light.png" alt="Notification Journal in the light theme" width="640">
 
 ## Features
 
@@ -81,9 +81,9 @@ Old entries are deleted once a day (*Retention*). The database is part of every 
 
 | Light | Dark |
 |-------|------|
-| <img src="docs/screenshots/timeline-light.png" alt="Timeline, light" width="360"> | <img src="docs/screenshots/timeline-dark.png" alt="Timeline, dark" width="360"> |
-| <img src="docs/screenshots/automations-light.png" alt="Grouped by automation, light" width="360"> | <img src="docs/screenshots/automations-dark.png" alt="Grouped by automation, dark" width="360"> |
-| <img src="docs/screenshots/mobile-light.png" alt="Phone, light" width="200"> | <img src="docs/screenshots/mobile-dark.png" alt="Phone, dark" width="200"> |
+| <img src="https://raw.githubusercontent.com/kimpenhaus/ha-notification-journal/main/docs/screenshots/timeline-light.png" alt="Timeline, light" width="360"> | <img src="https://raw.githubusercontent.com/kimpenhaus/ha-notification-journal/main/docs/screenshots/timeline-dark.png" alt="Timeline, dark" width="360"> |
+| <img src="https://raw.githubusercontent.com/kimpenhaus/ha-notification-journal/main/docs/screenshots/automations-light.png" alt="Grouped by automation, light" width="360"> | <img src="https://raw.githubusercontent.com/kimpenhaus/ha-notification-journal/main/docs/screenshots/automations-dark.png" alt="Grouped by automation, dark" width="360"> |
+| <img src="https://raw.githubusercontent.com/kimpenhaus/ha-notification-journal/main/docs/screenshots/mobile-light.png" alt="Phone, light" width="200"> | <img src="https://raw.githubusercontent.com/kimpenhaus/ha-notification-journal/main/docs/screenshots/mobile-dark.png" alt="Phone, dark" width="200"> |
 
 The screenshots show made-up data in Home Assistant's default theme.
 
@@ -94,7 +94,7 @@ The screenshots show made-up data in Home Assistant's default theme.
 
 ## Contributing
 
-Bug reports and ideas are welcome as [issues](https://github.com/kimpenhaus/ha-notification-journal/issues). How the integration is built, tested and released: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Bug reports and ideas are welcome as [issues](https://github.com/kimpenhaus/ha-notification-journal/issues). How the integration is built, tested and released: [docs/DEVELOPMENT.md](https://github.com/kimpenhaus/ha-notification-journal/blob/main/docs/DEVELOPMENT.md).
 
 ## How this project was made
 
@@ -102,4 +102,4 @@ This project was written with substantial help from AI, under my direction: I de
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/kimpenhaus/ha-notification-journal/blob/main/LICENSE)
