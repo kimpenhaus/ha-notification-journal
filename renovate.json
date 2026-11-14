@@ -15,10 +15,7 @@
     "pip_requirements",
     "npm"
   ],
-  "dependencyDashboard": {
-    "enabled": true,
-    "title": "Dependency Dashboard"
-  },
+  "dependencyDashboard": true,
   "osvVulnerabilityAlerts": true,
   "semanticCommits": "enabled",
   "packageRules": [
@@ -48,5 +45,6 @@
       ],
       "pinDigests": true
     }
-  ]
+  ],
+  "dependencyDashboardTitle": "Dependency Dashboard"
 }
