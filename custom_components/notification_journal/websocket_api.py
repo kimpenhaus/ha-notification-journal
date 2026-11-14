@@ -55,10 +55,19 @@ def _people(hass: HomeAssistant) -> dict[str, State]:
 
 
 def serialize(
-    hass: HomeAssistant, record: NotificationRecord, people: dict[str, State] | None = None
+    hass: HomeAssistant,
+    record: NotificationRecord,
+    people: dict[str, State] | None = None,
+    *,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return a record as the panel uses it: people with their current name and picture, and the path to its trace."""
+    """Return a record as the panel uses it: people with their current name and picture, and the path to its trace.
+
+    A caller limited to one user sees only that user's answers to the buttons.
+    """
     result = record.as_dict()
+    if user_id is not None:
+        result["answers"] = [answer for answer in result["answers"] if answer["user_id"] == user_id]
     if people is None:
         people = _people(hass)
     for recipient in [*result["recipients"], *(r for call in result["inner_calls"] for r in call["recipients"])]:
@@ -116,7 +125,7 @@ async def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
         )
     )
     people = _people(hass)
-    result: dict[str, Any] = {"records": [serialize(hass, r, people) for r in page.records]}
+    result: dict[str, Any] = {"records": [serialize(hass, r, people, user_id=user_id) for r in page.records]}
     if page.total is not None:
         result["total"] = page.total
     if page.groups is not None:
@@ -135,7 +144,7 @@ async def ws_get(hass: HomeAssistant, connection: websocket_api.ActiveConnection
     if record is None or (user_id is not None and not record.visible_to(user_id)):
         connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Notification not found")
         return
-    connection.send_result(msg["id"], serialize(hass, record))
+    connection.send_result(msg["id"], serialize(hass, record, user_id=user_id))
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/facets", vol.Optional("user_id"): str})
@@ -164,7 +173,9 @@ async def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConn
             connection.send_message(websocket_api.event_message(msg["id"], {"change": change, "record_id": record_id}))
         elif user_id is None or record.visible_to(user_id):
             connection.send_message(
-                websocket_api.event_message(msg["id"], {"change": change, "record": serialize(hass, record)})
+                websocket_api.event_message(
+                    msg["id"], {"change": change, "record": serialize(hass, record, user_id=user_id)}
+                )
             )
 
     connection.subscriptions[msg["id"]] = async_dispatcher_connect(hass, SIGNAL_CHANGED, _forward)

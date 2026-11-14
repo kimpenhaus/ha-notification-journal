@@ -1,6 +1,6 @@
 import { css, html, LitElement, nothing, type TemplateResult } from "lit";
 
-import { channelLabel, type Clock, dateTimeText, hue, initials, shortDateTimeText, timeText } from "./format";
+import { channelLabel, type Clock, dateTimeText, dayKey, hue, initials, shortDateTimeText, timeText } from "./format";
 import {
   icon,
   mdiAccountGroupOutline,
@@ -12,6 +12,7 @@ import {
   mdiBullhornOutline,
   mdiCellphone,
   mdiChatOutline,
+  mdiCheck,
   mdiCheckAll,
   mdiChevronDown,
   mdiCheckboxBlankCircleOutline,
@@ -28,7 +29,7 @@ import {
 } from "./icons";
 import { countText, type Localize } from "./localize";
 import { followInternal, inline } from "./markdown";
-import type { NotificationRecord, Origin, OriginKind, Recipient, Status } from "./types";
+import type { Answer, NotificationRecord, Origin, OriginKind, Recipient, Status } from "./types";
 
 const BELL = "persistent_notification";
 const SPEECH = "speech";
@@ -63,14 +64,33 @@ const DEVICE_ICONS: Partial<Record<Recipient["kind"], string>> = {
   chat: mdiChatOutline,
 };
 
+interface Button {
+  action: string;
+  title: string;
+}
+
+/** The buttons a notification offered in the Companion app (`data.actions`). */
+function offeredButtons(record: NotificationRecord): Button[] {
+  const inner = record.data?.["data"];
+  const actions = inner && typeof inner === "object" ? (inner as Record<string, unknown>)["actions"] : undefined;
+  if (!Array.isArray(actions)) return [];
+  return actions.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const { action, title } = item as Record<string, unknown>;
+    return typeof action === "string" ? [{ action, title: typeof title === "string" ? title : action }] : [];
+  });
+}
+
+function personAvatar(id: string, name: string, picture: string | null): TemplateResult {
+  return picture
+    ? html`<img class="avatar" src=${picture} alt="" loading="lazy" />`
+    : html`<span class="avatar initials" style="--avatar-hue: ${hue(id)}">${initials(name)}</span>`;
+}
+
 export function recipientChip(recipient: Recipient): TemplateResult {
   let avatar: TemplateResult;
-  if (recipient.kind === "person" && recipient.picture) {
-    avatar = html`<img class="avatar" src=${recipient.picture} alt="" loading="lazy" />`;
-  } else if (recipient.kind === "person") {
-    avatar = html`<span class="avatar initials" style="--avatar-hue: ${hue(recipient.id)}"
-      >${initials(recipient.name)}</span
-    >`;
+  if (recipient.kind === "person") {
+    avatar = personAvatar(recipient.id, recipient.name, recipient.picture);
   } else {
     avatar = html`<span class="avatar device">${icon(DEVICE_ICONS[recipient.kind] ?? mdiBellOutline)}</span>`;
   }
@@ -127,9 +147,12 @@ export class NotificationJournalRecord extends LitElement {
         ? mdiBullhornOutline
         : STATUS_ICONS[record.status];
     const title = record.title || localize(record.source === SPEECH ? "untitled_speech" : "untitled");
+    const answered = record.status === "sent" && record.answers.length > 0;
     return html`
       <article
-        class="card ${record.status} ${this.selectable ? "selectable" : ""} ${this.selected ? "selected" : ""}"
+        class="card ${record.status} ${answered ? "answered" : ""} ${this.selectable ? "selectable" : ""} ${
+          this.selected ? "selected" : ""
+        }"
         @click=${this._clicked}
       >
         <div class="side">
@@ -149,7 +172,13 @@ export class NotificationJournalRecord extends LitElement {
         <div class="body">
           <header>
             <h3>${title}</h3>
-            ${record.status === "sent" ? nothing : html`<span class="badge">${statusText}</span>`}
+            ${
+              answered
+                ? html`<span class="badge">${localize("status_answered")}</span>`
+                : record.status === "sent"
+                  ? nothing
+                  : html`<span class="badge">${statusText}</span>`
+            }
             <time datetime=${record.time} title=${dateTimeText(this.clock, record.time)}
               >${this.showDate ? shortDateTimeText(this.clock, record.time) : timeText(this.clock, record.time)}</time
             >
@@ -157,6 +186,7 @@ export class NotificationJournalRecord extends LitElement {
           <div class="indent">
             ${this._message()} ${this._statusNote(statusText)}
             ${record.error ? html`<p class="error">${icon(mdiAlertCircleOutline)}${record.error}</p>` : nothing}
+            ${this._buttons()}
             <div class="chips">${this._origin()} ${this._route()}</div>
             ${this._calls ? this._innerCalls() : nothing} ${this._details ? this._detailList() : nothing}
           </div>
@@ -198,6 +228,73 @@ export class NotificationJournalRecord extends LitElement {
     if (!record.message) return nothing;
     const content = record.source === BELL ? inline(record.message) : record.message;
     return html`<p class="message ${this._details ? "" : "clamp"}">${content}</p>`;
+  }
+
+  private _buttons(): TemplateResult | typeof nothing {
+    const record = this.record;
+    const buttons = offeredButtons(record);
+    if (!buttons.length) return nothing;
+    const answers = record.answers;
+    const single = answers.length === 1 ? answers[0] : undefined;
+    return html`<div class="actions">
+      <div class="buttons">
+        ${buttons.map((button) => {
+          const chosen = answers.filter((answer) => answer.action === button.action);
+          if (!chosen.length) return html`<span class="button">${button.title}</span>`;
+          const by = single ? `${this._answerer(single).name}, ${this._answerTime(single)}` : String(chosen.length);
+          return html`<span class="button chosen"
+            >${icon(mdiCheck)}${button.title}<span class="by">· ${by}</span></span
+          >`;
+        })}
+      </div>
+      ${single?.reply_text ? this._reply(single) : nothing}
+      ${
+        answers.length > 1
+          ? html`<ul class="answers">
+              ${answers.map((answer) => this._answerRow(answer, buttons))}
+            </ul>`
+          : nothing
+      }
+    </div>`;
+  }
+
+  private _answerer(answer: Answer): { id: string; name: string; picture: string | null } {
+    const record = this.record;
+    const person = answer.user_id
+      ? [...record.recipients, ...record.inner_calls.flatMap((call) => call.recipients)].find(
+          (recipient) => recipient.user_id === answer.user_id,
+        )
+      : undefined;
+    if (person) return person;
+    const id = answer.user_id ?? "";
+    return {
+      id,
+      name: (answer.user_id && this.userNames.get(answer.user_id)) || this.localize("someone"),
+      picture: null,
+    };
+  }
+
+  private _answerTime(answer: Answer): string {
+    const sameDay = dayKey(this.clock, answer.time) === dayKey(this.clock, this.record.time);
+    return sameDay ? timeText(this.clock, answer.time) : shortDateTimeText(this.clock, answer.time);
+  }
+
+  private _reply(answer: Answer): TemplateResult {
+    const who = this._answerer(answer);
+    return html`<div class="reply">
+      ${personAvatar(who.id, who.name, who.picture)}
+      <p>${answer.reply_text}<span class="by">${who.name}, ${this._answerTime(answer)}</span></p>
+    </div>`;
+  }
+
+  private _answerRow(answer: Answer, buttons: Button[]): TemplateResult {
+    const who = this._answerer(answer);
+    const title = buttons.find((button) => button.action === answer.action)?.title ?? answer.action;
+    return html`<li>
+      ${personAvatar(who.id, who.name, who.picture)}
+      <span>${who.name}: <b>${title}</b>${answer.reply_text ? html` „${answer.reply_text}“` : nothing}</span>
+      <span class="by">${this._answerTime(answer)}</span>
+    </li>`;
   }
 
   private _originName(origin: Origin): string | undefined {
@@ -335,7 +432,8 @@ export class NotificationJournalRecord extends LitElement {
       box-shadow: var(--ha-card-box-shadow, none);
       border-left: 4px solid var(--status-color);
     }
-    .card.delivered {
+    .card.delivered,
+    .card.answered {
       --status-color: var(--success-color, #43a047);
     }
     .card.failed {
@@ -472,6 +570,77 @@ export class NotificationJournalRecord extends LitElement {
     }
     .indent {
       padding-left: 14px;
+    }
+    .actions {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--divider-color, #e0e0e0);
+      color: var(--secondary-text-color);
+      font-size: 0.85rem;
+      overflow-wrap: anywhere;
+    }
+    .button.chosen {
+      --answer-color: var(--success-color, #43a047);
+      border-color: var(--answer-color);
+      color: var(--answer-color);
+      background: color-mix(in srgb, var(--answer-color) 12%, transparent);
+      font-weight: 500;
+    }
+    .button.chosen .icon {
+      width: 16px;
+      height: 16px;
+    }
+    .by {
+      font-weight: 400;
+      font-size: 0.8rem;
+      color: var(--secondary-text-color);
+    }
+    .reply {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: var(--secondary-background-color, #f5f5f5);
+    }
+    .reply p {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .reply .by {
+      display: block;
+      margin-top: 2px;
+    }
+    .answers {
+      display: grid;
+      gap: 6px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      font-size: 0.85rem;
+    }
+    .answers li {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .answers b {
+      font-weight: 500;
     }
     .chips {
       display: flex;

@@ -17,10 +17,12 @@ from homeassistant.util import dt as dt_util
 
 from .models import (
     EVERYONE,
+    Answer,
     Call,
     NotificationRecord,
     Origin,
     Status,
+    answer_from_dict,
     call_from_dict,
     origin_from_dict,
     recipient_from_dict,
@@ -28,7 +30,7 @@ from .models import (
 
 _LOGGER = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 VISIBLE_TO_USER = f"rowid IN (SELECT notification FROM notification_users WHERE user_id IN (?, '{EVERYONE}'))"
 BACKUP_PAUSE_LIMIT = 1800
 ORIGIN_GROUP = "coalesce(origin_entity_id, 'integration.' || json_extract(origin, '$.integration'), origin_kind)"
@@ -54,7 +56,8 @@ CREATE TABLE IF NOT EXISTS notifications (
     inner_calls TEXT NOT NULL DEFAULT '[]',
     source_ref TEXT,
     status_time REAL,
-    status_by TEXT
+    status_by TEXT,
+    answers TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS notifications_time ON notifications (time);
 CREATE INDEX IF NOT EXISTS notifications_origin ON notifications (origin_entity_id);
@@ -94,6 +97,7 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE notifications ADD COLUMN status_by TEXT",
         "CREATE INDEX notifications_source_ref ON notifications (source, source_ref) WHERE source_ref IS NOT NULL",
     ),
+    4: ("ALTER TABLE notifications ADD COLUMN answers TEXT NOT NULL DEFAULT '[]'",),
 }
 """The steps from the previous schema version to each version; a new version adds its step here."""
 
@@ -204,6 +208,17 @@ class NotificationStore:
     def set_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
         """Submit a change of status, with when and by whom it happened."""
         self._submit(self._update_status, record_id, status, time, by, notify=("updated", record_id))
+
+    async def async_add_answer(self, source: str, answer: Answer) -> str | None:
+        """Attach an answer to the latest record of a source that offered its button; return that record's id.
+
+        A record that reached the user who answered comes first; an action ID used by several
+        notifications belongs to the most recent one.
+        """
+        record_id = await self._run(self._add_answer, source, answer)
+        if record_id is not None:
+            self._notify("updated", record_id)
+        return record_id
 
     async def async_open_records(self, source: str) -> dict[str, tuple[str, datetime]]:
         """Return the records of a source that are still open, as {source_ref: (record id, time)}."""
@@ -326,8 +341,8 @@ class NotificationStore:
             cursor = db.execute(
                 """INSERT INTO notifications (id, time, source, channel, title, message, data, recipients, origin,
                        origin_kind, origin_entity_id, context_id, status, error, grp, inner_calls, source_ref,
-                       status_time, status_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       status_time, status_by, answers)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     record.id,
                     record.time.timestamp(),
@@ -348,6 +363,7 @@ class NotificationStore:
                     record.source_ref,
                     record.status_time.timestamp() if record.status_time else None,
                     json.dumps(asdict(record.status_by)) if record.status_by else None,
+                    json.dumps([answer.as_dict() for answer in record.answers]),
                 ),
             )
             rowid = cursor.lastrowid
@@ -374,6 +390,30 @@ class NotificationStore:
                 "UPDATE notifications SET status = ?, status_time = ?, status_by = ? WHERE id = ?",
                 (status.value, time.timestamp(), json.dumps(asdict(by)) if by else None, record_id),
             )
+
+    def _add_answer(self, source: str, answer: Answer) -> str | None:
+        db = self._db()
+        offered = (
+            "SELECT rowid, id FROM notifications WHERE source = ? AND EXISTS "
+            "(SELECT 1 FROM json_each(data, '$.data.actions') WHERE json_extract(value, '$.action') = ?)"
+        )
+        newest = " ORDER BY time DESC, rowid DESC LIMIT 1"
+        row = None
+        if answer.user_id is not None:
+            row = db.execute(
+                f"{offered} AND rowid IN (SELECT notification FROM notification_users WHERE user_id = ?){newest}",
+                (source, answer.action, answer.user_id),
+            ).fetchone()
+        if row is None:
+            row = db.execute(offered + newest, (source, answer.action)).fetchone()
+        if row is None:
+            return None
+        with db:
+            db.execute(
+                "UPDATE notifications SET answers = json_insert(answers, '$[#]', json(?)) WHERE rowid = ?",
+                (json.dumps(answer.as_dict()), row[0]),
+            )
+        return row[1]
 
     def _open_records(self, source: str) -> dict[str, tuple[str, datetime]]:
         rows = self._db().execute(
@@ -527,6 +567,7 @@ class NotificationStore:
             source_ref,
             status_time,
             status_by,
+            answers,
         ) = row
         return NotificationRecord(
             id=record_id,
@@ -546,4 +587,5 @@ class NotificationStore:
             source_ref=source_ref,
             status_time=None if status_time is None else dt_util.utc_from_timestamp(status_time),
             status_by=None if status_by is None else origin_from_dict(json.loads(status_by)),
+            answers=[answer_from_dict(a) for a in json.loads(answers)],
         )

@@ -317,3 +317,52 @@ async def test_excluded_group_drops_its_member_calls_too(hass: HomeAssistant, ph
     await hass.services.async_call("notify", "phone_ben", {"message": "Direct"}, blocking=True)
 
     assert [r.message for r in await _records(runtime)] == ["Direct"]
+
+
+GARAGE_BUTTONS = {"actions": [{"action": "CLOSE_GARAGE", "title": "Close"}, {"action": "REPLY", "title": "Reply"}]}
+
+
+async def _ask(hass: HomeAssistant, service: str, message: str) -> None:
+    await hass.services.async_call("notify", service, {"message": message, "data": GARAGE_BUTTONS}, blocking=True)
+
+
+async def _answer(hass: HomeAssistant, user_id: str | None, **data: object) -> None:
+    hass.bus.async_fire("mobile_app_notification_action", data, context=Context(user_id=user_id))
+    await hass.async_block_till_done()
+
+
+async def test_answer_is_attached_to_the_notification(hass: HomeAssistant, phones: list, anna: str) -> None:
+    runtime = await _setup(hass)
+    await _ask(hass, "phone_anna", "Garage door is open")
+
+    await _answer(hass, anna, action="CLOSE_GARAGE")
+    await _answer(hass, anna, action="REPLY", reply_text="Closing it from the car")
+
+    answers = (await _only(runtime)).answers
+    assert [(a.action, a.user_id, a.reply_text) for a in answers] == [
+        ("CLOSE_GARAGE", anna, None),
+        ("REPLY", anna, "Closing it from the car"),
+    ]
+
+
+async def test_answer_goes_to_the_latest_notification_of_the_user(hass: HomeAssistant, phones: list, anna: str) -> None:
+    runtime = await _setup(hass)
+    await _ask(hass, "phone_anna", "first")
+    await _ask(hass, "phone_anna", "second")
+    await _ask(hass, "phone_ben", "for someone else")
+
+    await _answer(hass, anna, action="CLOSE_GARAGE")
+    await _answer(hass, None, action="CLOSE_GARAGE")
+
+    answered = {r.message: [a.user_id for a in r.answers] for r in await _records(runtime)}
+    assert answered == {"first": [], "second": [anna], "for someone else": [None]}
+
+
+async def test_answer_without_a_matching_button_is_dropped(hass: HomeAssistant, phones: list, anna: str) -> None:
+    runtime = await _setup(hass)
+    await _ask(hass, "phone_anna", "Garage door is open")
+
+    await _answer(hass, anna, action="SOMETHING_ELSE")
+    await _answer(hass, anna)
+
+    assert (await _only(runtime)).answers == []

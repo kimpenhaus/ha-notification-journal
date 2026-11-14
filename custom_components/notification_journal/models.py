@@ -77,6 +77,20 @@ class Call:
 
 
 @dataclass(slots=True)
+class Answer:
+    """A button of an actionable notification that someone chose, with the text they typed if it asked for one."""
+
+    action: str
+    time: datetime
+    user_id: str | None = None
+    reply_text: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the answer as plain data."""
+        return {**asdict(self), "time": self.time.isoformat()}
+
+
+@dataclass(slots=True)
 class NotificationRecord:
     """A sent notification as the history keeps it."""
 
@@ -97,6 +111,7 @@ class NotificationRecord:
     source_ref: str | None = None
     status_time: datetime | None = None
     status_by: Origin | None = None
+    answers: list[Answer] = field(default_factory=list)
 
     @property
     def all_recipients(self) -> list[Recipient]:
@@ -122,6 +137,7 @@ class NotificationRecord:
         result = asdict(self)
         result["time"] = self.time.isoformat()
         result["status_time"] = self.status_time.isoformat() if self.status_time else None
+        result["answers"] = [answer.as_dict() for answer in self.answers]
         return result
 
 
@@ -133,6 +149,11 @@ def recipient_from_dict(data: dict[str, Any]) -> Recipient:
 def origin_from_dict(data: dict[str, Any]) -> Origin:
     """Rebuild an origin from plain data."""
     return Origin(**{**data, "kind": OriginKind(data["kind"])})
+
+
+def answer_from_dict(data: dict[str, Any]) -> Answer:
+    """Rebuild an answer from plain data."""
+    return Answer(**{**data, "time": datetime.fromisoformat(data["time"])})
 
 
 def call_from_dict(data: dict[str, Any]) -> Call:
