@@ -282,3 +282,18 @@ async def test_subscription_survives_a_reload_of_the_entry(
 
     event = await client.receive_json()
     assert (event["event"]["change"], event["event"]["record"]["id"]) == ("added", "after")
+
+
+async def test_only_the_first_page_carries_the_counts(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator, hass_admin_user: User, hass_read_only_user: User
+) -> None:
+    runtime = await _setup(hass)
+    await _fill(runtime, hass_admin_user, hass_read_only_user)
+    client = await hass_ws_client(hass)
+
+    first = (await _call(client, type=f"{DOMAIN}/list", limit=1, group_by="origin"))["result"]
+    second = (await _call(client, type=f"{DOMAIN}/list", limit=1, offset=1, group_by="origin"))["result"]
+
+    assert first["total"] > 1 and "groups" in first
+    assert len(second["records"]) == 1
+    assert "total" not in second and "groups" not in second

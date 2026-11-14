@@ -26,8 +26,17 @@ function parts(clock: Clock, date: Date): string {
   }).format(date);
 }
 
+const dayKeys = new Map<string, string>();
+
 export function dayKey(clock: Clock, iso: string): string {
-  return parts(clock, new Date(iso));
+  const key = `${clock.timeZone ?? ""}|${iso}`;
+  let day = dayKeys.get(key);
+  if (day === undefined) {
+    if (dayKeys.size > 5000) dayKeys.clear();
+    day = parts(clock, new Date(iso));
+    dayKeys.set(key, day);
+  }
+  return day;
 }
 
 export function dayLabel(clock: Clock, localize: Localize, key: string, now = new Date()): string {
