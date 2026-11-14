@@ -1,6 +1,6 @@
 export type Status = "sent" | "delivered" | "failed" | "dismissed" | "replaced";
 export type RecipientKind = "person" | "entity" | "channel" | "everyone" | "speaker" | "chat";
-export type OriginKind = "automation" | "script" | "user" | "system" | "unknown";
+export type OriginKind = "automation" | "script" | "user" | "integration" | "system" | "unknown";
 
 export interface Recipient {
   kind: RecipientKind;
@@ -17,6 +17,7 @@ export interface Origin {
   trace_key: string | null;
   run_id: string | null;
   user_id: string | null;
+  integration?: string | null;
 }
 
 export interface Call {

@@ -31,7 +31,7 @@ _LOGGER = logging.getLogger(__name__)
 SCHEMA_VERSION = 3
 VISIBLE_TO_USER = f"rowid IN (SELECT notification FROM notification_users WHERE user_id IN (?, '{EVERYONE}'))"
 BACKUP_PAUSE_LIMIT = 1800
-ORIGIN_GROUP = "coalesce(origin_entity_id, origin_kind)"
+ORIGIN_GROUP = "coalesce(origin_entity_id, 'integration.' || json_extract(origin, '$.integration'), origin_kind)"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notifications (
@@ -472,7 +472,7 @@ class NotificationStore:
                         f"SELECT {ORIGIN_GROUP}, count(*) FROM notifications {clause} GROUP BY {ORIGIN_GROUP}", params
                     ).fetchall()
                 )
-            sort = f"origin_entity_id IS NULL, origin_entity_id, origin_kind, {sort}"
+            sort = f"origin_entity_id IS NULL, origin_entity_id, origin_kind, {ORIGIN_GROUP}, {sort}"
         rows = db.execute(
             f"SELECT * FROM notifications {clause} ORDER BY {sort} LIMIT ? OFFSET ?",
             [*params, query.limit, query.offset],

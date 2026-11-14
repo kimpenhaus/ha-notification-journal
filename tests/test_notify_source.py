@@ -8,7 +8,7 @@ from homeassistant.core import Context, HomeAssistant, ServiceCall
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import MockConfigEntry, MockModule, mock_integration
 
 from custom_components.notification_journal import RuntimeData
 from custom_components.notification_journal.const import (
@@ -173,6 +173,43 @@ async def test_call_by_user_has_user_origin(hass: HomeAssistant, phones: list) -
 
     origin = (await _only(runtime)).origin
     assert (origin.kind, origin.user_id) == (OriginKind.USER, user.id)
+
+
+async def _send_from(hass: HomeAssistant, path: str) -> None:
+    """Call notify.phone_ben from code that Python takes for the file at `path`."""
+    namespace: dict = {}
+    code = (
+        "async def send(hass):\n"
+        "    await hass.services.async_call('notify', 'phone_ben', {'message': 'Test'}, blocking=True)\n"
+    )
+    exec(compile(code, path, "exec"), namespace)
+    await namespace["send"](hass)
+
+
+async def test_call_by_custom_integration_names_it(hass: HomeAssistant, phones: list) -> None:
+    mock_integration(hass, MockModule("weather_coach", partial_manifest={"name": "Weather Coach"}))
+    runtime = await _setup(hass)
+
+    await _send_from(hass, "/config/custom_components/weather_coach/scheduler.py")
+
+    origin = (await _only(runtime)).origin
+    assert (origin.kind, origin.name, origin.integration) == (OriginKind.INTEGRATION, "Weather Coach", "weather_coach")
+
+
+async def test_call_by_built_in_integration_is_home_assistant(hass: HomeAssistant, phones: list) -> None:
+    runtime = await _setup(hass)
+
+    await _send_from(hass, "/usr/src/homeassistant/homeassistant/components/alert/__init__.py")
+
+    assert (await _only(runtime)).origin.kind is OriginKind.SYSTEM
+
+
+async def test_call_without_caller_has_unknown_origin(hass: HomeAssistant, phones: list) -> None:
+    runtime = await _setup(hass)
+
+    await hass.services.async_call("notify", "phone_ben", {"message": "Test"}, blocking=True)
+
+    assert (await _only(runtime)).origin.kind is OriginKind.UNKNOWN
 
 
 async def test_excluded_channel_is_not_recorded(hass: HomeAssistant, phones: list) -> None:

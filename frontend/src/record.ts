@@ -19,6 +19,7 @@ import {
   mdiHelpCircleOutline,
   mdiHomeAssistant,
   mdiOpenInNew,
+  mdiPuzzleOutline,
   mdiRobotOutline,
   mdiScriptTextOutline,
   mdiSendCheckOutline,
@@ -43,6 +44,7 @@ const ORIGIN_ICONS: Record<OriginKind, string> = {
   automation: mdiRobotOutline,
   script: mdiScriptTextOutline,
   user: mdiAccountOutline,
+  integration: mdiPuzzleOutline,
   system: mdiHomeAssistant,
   unknown: mdiHelpCircleOutline,
 };
@@ -201,6 +203,7 @@ export class NotificationJournalRecord extends LitElement {
   private _originName(origin: Origin): string | undefined {
     if (origin.kind === "automation" || origin.kind === "script") return origin.name ?? origin.entity_id ?? undefined;
     if (origin.kind === "user") return origin.user_id ? this.userNames.get(origin.user_id) : undefined;
+    if (origin.kind === "integration") return origin.name ?? origin.integration ?? undefined;
     if (origin.kind === "system") return this.localize("origin_system");
     return undefined;
   }
@@ -223,6 +226,11 @@ export class NotificationJournalRecord extends LitElement {
       const name = origin.user_id ? this.userNames.get(origin.user_id) : undefined;
       return html`<span class="chip origin"
         >${originGlyph(origin, this.originIcons)}${name ? localize("origin_user", { name }) : localize("origin_user_unknown")}</span
+      >`;
+    }
+    if (origin.kind === "integration") {
+      return html`<span class="chip origin" title=${localize("origin_integration")}
+        >${originGlyph(origin, this.originIcons)}<span>${origin.name ?? origin.integration}</span></span
       >`;
     }
     if (origin.kind === "system") {

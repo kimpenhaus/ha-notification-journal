@@ -73,8 +73,10 @@ function store(key: string, value: string): void {
   }
 }
 
+/** The key of an origin's group, the same as `ORIGIN_GROUP` in the store. */
 function groupKey(record: NotificationRecord): string {
-  return record.origin.entity_id ?? record.origin.kind;
+  const origin = record.origin;
+  return origin.entity_id ?? (origin.integration ? `integration.${origin.integration}` : origin.kind);
 }
 
 function compare(left: string, right: string): number {
@@ -82,7 +84,7 @@ function compare(left: string, right: string): number {
 }
 
 function originRank(record: NotificationRecord): string {
-  return record.origin.entity_id ? `0${record.origin.entity_id}` : `1${record.origin.kind}`;
+  return record.origin.entity_id ? `0${record.origin.entity_id}` : `1${record.origin.kind} ${groupKey(record)}`;
 }
 
 function sameMap(left: Map<string, string>, right: Map<string, string>): boolean {
@@ -806,6 +808,8 @@ export class NotificationJournalPanel extends LitElement {
       name = String(
         state?.attributes.friendly_name ?? origin.name ?? origin.entity_id ?? localize(`origin_${origin.kind}`),
       );
+    } else if (origin.kind === "integration") {
+      name = origin.name ?? origin.integration ?? localize("origin_integration");
     } else {
       name = localize(origin.kind === "user" ? "origin_by_hand" : `origin_${origin.kind}`);
     }

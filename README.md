@@ -14,7 +14,7 @@ Home Assistant forgets a notification the moment it is sent. Notification Journa
   - spoken announcements with text: `tts.speak` on media players and `assist_satellite.announce` on voice satellites
   - Telegram: messages, captioned photos, videos and files, and polls sent with the Telegram bot's own actions, named after the chats
 - **Shows who it reached**: notify groups are resolved into the people and devices behind them; a person's current name and picture are shown.
-- **Shows where it came from**: the automation or script that sent it, with a link to the exact trace of that run, or the user who sent it by hand.
+- **Shows where it came from**: the automation or script that sent it, with a link to the exact trace of that run, the user who sent it by hand, or the custom integration that sent it from its own code.
 - **Two views**: a timeline by day, or grouped by automation; both sorted newest or oldest first, every day and group can be folded.
 - **Search and filters**: full-text search over title, message, recipients and origin; filters for status, origin and period.
 - **Archive**: select notifications and move them out of your view, as in Home Assistant's own lists; the archive is per person, others keep seeing them.
@@ -63,7 +63,7 @@ Every card shows a status:
 
 ## Privacy
 
-Everything stays in your Home Assistant. The journal is an SQLite database, `notification_journal.db`, next to `configuration.yaml`, separate from the recorder. It holds per notification: title, message, the data sent with it (actions, references to images and links, tags), the recipients, the automation, script or user that sent it, and the time. Images and attachments themselves are not copied, only their references.
+Everything stays in your Home Assistant. The journal is an SQLite database, `notification_journal.db`, next to `configuration.yaml`, separate from the recorder. It holds per notification: title, message, the data sent with it (actions, references to images and links, tags), the recipients, the automation, script, user or integration that sent it, and the time. Images and attachments themselves are not copied, only their references.
 
 Old entries are deleted once a day (*Retention*). The database is part of every Home Assistant backup; recording pauses while a backup is taken. Removing the integration keeps the database file; delete it by hand if you want the journal gone.
 
