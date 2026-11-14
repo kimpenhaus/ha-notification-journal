@@ -3,6 +3,7 @@ name: release
 on:
   push:
     branches: [main]
+    tags: ["v*-beta.*"]
   release:
     types: [published]
 
@@ -12,7 +13,7 @@ permissions:
 
 jobs:
   release-please:
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     outputs:
       created: ${{ steps.release.outputs.release_created }}
@@ -53,39 +54,26 @@ jobs:
             while read -r tag; do gh release delete "${tag}" --cleanup-tag --yes; done
 
   beta:
-    needs: release-please
-    # Every push to main that leaves a release pending becomes a pre-release of that version; it replaces the previous one.
-    if: ${{ github.event_name == 'push' && needs.release-please.outputs.created != 'true' }}
+    # A tag v<version>-beta.<n> becomes a pre-release of that version; release-please leaves these tags alone.
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v7
-      - name: Next version
-        id: next
-        run: |
-          title="$(gh pr list --label 'autorelease: pending' --state open --json title --jq '.[0].title // ""')"
-          version="$(printf '%s\n' "${title}" | sed -n 's/^.* release \([0-9][0-9A-Za-z.+-]*\)$/\1/p')"
-          if [ -z "${version}" ]; then
-            echo "No release pending, so no pre-release."
-          else
-            echo "tag=v${version}-beta.${GITHUB_RUN_NUMBER}" >> "${GITHUB_OUTPUT}"
-          fi
-      - if: ${{ steps.next.outputs.tag }}
-        uses: actions/setup-node@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 26
       - name: Build the panel
-        if: ${{ steps.next.outputs.tag }}
         working-directory: frontend
         run: npm ci --no-audit --no-fund && npm run build
       - name: Publish the pre-release
-        if: ${{ steps.next.outputs.tag }}
-        env:
-          TAG: ${{ steps.next.outputs.tag }}
         run: |
           scripts/package.sh "${TAG#v}"
-          gh release create "${TAG}" notification_journal.zip --prerelease --target "${GITHUB_SHA}" \
-            --title "${TAG}" --notes "Pre-release of the next version, built from ${GITHUB_SHA}. Not for general use."
-          gh release list --limit 100 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease) | .tagName' |
-            { grep -vx "${TAG}" || true; } | while read -r tag; do gh release delete "${tag}" --cleanup-tag --yes; done
+          if gh release view "${TAG}" > /dev/null 2>&1; then
+            gh release upload "${TAG}" notification_journal.zip --clobber
+          else
+            gh release create "${TAG}" notification_journal.zip --prerelease --verify-tag \
+              --title "${TAG}" --notes "Pre-release for testing, built from ${GITHUB_SHA}."
+          fi
