@@ -1,0 +1,21 @@
+{
+  "domain": "notification_journal",
+  "name": "Notification Journal",
+  "codeowners": [
+    "@kimpenhaus"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "frontend",
+    "http",
+    "persistent_notification",
+    "websocket_api"
+  ],
+  "documentation": "https://github.com/kimpenhaus/ha-notification-journal",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/kimpenhaus/ha-notification-journal/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.0.0"
+}

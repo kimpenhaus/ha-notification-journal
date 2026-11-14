@@ -1,0 +1,81 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Notification Journal",
+        "description": "Records every notification Home Assistant sends, with its recipients, the automation or script that sent it and its status. You can change what is kept and for how long in the options."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Notification Journal is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Notification Journal",
+        "sections": {
+          "sources": {
+            "name": "Sources",
+            "description": "What is recorded. A source turned off records nothing more; what is already in the history stays.",
+            "data": {
+              "record_notify": "Notifications",
+              "record_persistent_notifications": "Home Assistant's notifications",
+              "record_speech": "Speech announcements",
+              "record_telegram": "Telegram",
+              "excluded_channels": "Do not record"
+            },
+            "data_description": {
+              "record_notify": "Calls of notify actions: companion app, groups and every other notify action.",
+              "record_persistent_notifications": "The bell in the sidebar, with when and by whom they were dismissed. Like in Home Assistant, every user sees them.",
+              "record_speech": "tts.speak on media players and assist_satellite.announce on voice satellites, with text. Every user sees them.",
+              "record_telegram": "Messages, captioned photos, videos and files, and polls sent with the Telegram bot's own actions. Only administrators see them.",
+              "excluded_channels": "Channels whose notifications are not recorded, from any source: a notify action or entity, a media player or a voice satellite."
+            }
+          },
+          "retention": {
+            "name": "Retention",
+            "data": {
+              "retention_days": "Keep for",
+              "max_entries": "At most"
+            },
+            "data_description": {
+              "retention_days": "Older entries are deleted once a day.",
+              "max_entries": "When there are more, the oldest are deleted first."
+            }
+          },
+          "access": {
+            "name": "Access",
+            "data": {
+              "non_admin_visibility": "Users without administrator rights see"
+            },
+            "data_description": {
+              "non_admin_visibility": "Administrators always see everything."
+            }
+          },
+          "sidebar": {
+            "name": "Sidebar",
+            "data": {
+              "show_in_sidebar": "Show in the sidebar",
+              "panel_title": "Title",
+              "panel_icon": "Icon"
+            },
+            "data_description": {
+              "show_in_sidebar": "When hidden, the history stays reachable under /notification-journal.",
+              "panel_title": "Empty: the name in the language of Home Assistant.",
+              "panel_icon": "Empty: the icon of the integration."
+            }
+          }
+        }
+      }
+    }
+  },
+  "selector": {
+    "non_admin_visibility": {
+      "options": {
+        "own": "The notifications sent to them and the bell",
+        "none": "Nothing"
+      }
+    }
+  }
+}

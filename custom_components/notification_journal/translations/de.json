@@ -1,0 +1,81 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Benachrichtigungsverlauf",
+        "description": "Zeichnet jede Benachrichtigung auf, die Home Assistant verschickt, mit Empfängern, der auslösenden Automation oder dem Skript und dem Status. Was wie lange aufbewahrt wird, lässt sich in den Optionen ändern."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Der Benachrichtigungsverlauf ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Benachrichtigungsverlauf",
+        "sections": {
+          "sources": {
+            "name": "Quellen",
+            "description": "Was aufgezeichnet wird. Eine abgewählte Quelle zeichnet nichts mehr auf; was schon im Verlauf steht, bleibt.",
+            "data": {
+              "record_notify": "Benachrichtigungen",
+              "record_persistent_notifications": "Meldungen von Home Assistant",
+              "record_speech": "Sprachansagen",
+              "record_telegram": "Telegram",
+              "excluded_channels": "Nicht aufzeichnen"
+            },
+            "data_description": {
+              "record_notify": "Aufrufe von notify-Aktionen: Companion-App, Gruppen und alle anderen notify-Aktionen.",
+              "record_persistent_notifications": "Die Glocke in der Seitenleiste, mit Zeitpunkt und Urheber des Verwerfens. Wie in Home Assistant sieht sie jeder Benutzer.",
+              "record_speech": "tts.speak auf Mediaplayern und assist_satellite.announce auf Sprachsatelliten, mit Text. Jeder Benutzer sieht sie.",
+              "record_telegram": "Nachrichten, beschriftete Fotos, Videos und Dateien sowie Umfragen über die Aktionen des Telegram-Bots. Nur Administratoren sehen sie.",
+              "excluded_channels": "Kanäle, deren Nachrichten nicht aufgezeichnet werden, aus jeder Quelle: notify-Aktion oder -Entität, Mediaplayer oder Sprachsatellit."
+            }
+          },
+          "retention": {
+            "name": "Aufbewahrung",
+            "data": {
+              "retention_days": "Aufbewahren für",
+              "max_entries": "Höchstens"
+            },
+            "data_description": {
+              "retention_days": "Ältere Einträge werden einmal täglich gelöscht.",
+              "max_entries": "Bei mehr werden die ältesten zuerst gelöscht."
+            }
+          },
+          "access": {
+            "name": "Zugriff",
+            "data": {
+              "non_admin_visibility": "Benutzer ohne Administratorrechte sehen"
+            },
+            "data_description": {
+              "non_admin_visibility": "Administratoren sehen immer alles."
+            }
+          },
+          "sidebar": {
+            "name": "Seitenleiste",
+            "data": {
+              "show_in_sidebar": "In der Seitenleiste anzeigen",
+              "panel_title": "Titel",
+              "panel_icon": "Symbol"
+            },
+            "data_description": {
+              "show_in_sidebar": "Ausgeblendet bleibt der Verlauf unter /notification-journal erreichbar.",
+              "panel_title": "Leer: der Name in der Sprache von Home Assistant.",
+              "panel_icon": "Leer: das Symbol der Integration."
+            }
+          }
+        }
+      }
+    }
+  },
+  "selector": {
+    "non_admin_visibility": {
+      "options": {
+        "own": "Die an sie geschickten Benachrichtigungen und die Glocke",
+        "none": "Nichts"
+      }
+    }
+  }
+}

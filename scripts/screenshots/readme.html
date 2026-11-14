@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html, body { margin: 0; height: 100%; }
+      body {
+        font-family: Roboto, "Noto Sans", sans-serif;
+        --primary-color: #009ac7; --text-primary-color: #fff;
+        --primary-background-color: #fafafa; --secondary-background-color: #e5e5e5;
+        --card-background-color: #fff; --primary-text-color: #141414; --secondary-text-color: #5e5e5e;
+        --divider-color: #0000001f; --app-header-background-color: #fff; --app-header-text-color: #141414;
+        --success-color: #43a047; --error-color: #db4437; --info-color: #039be5; --ha-card-border-radius: 12px;
+      }
+      body.dark {
+        --primary-color: #37c8fd;
+        --primary-background-color: #111; --secondary-background-color: #282828; --card-background-color: #1c1c1c;
+        --primary-text-color: #e1e1e1; --secondary-text-color: #9b9b9b; --divider-color: #e1e1e11f;
+        --app-header-background-color: #1c1c1c; --app-header-text-color: #e1e1e1;
+      }
+    </style>
+    <script src="readme-data.js"></script>
+  </head>
+  <body>
+    <script type="module">
+      const params = new URLSearchParams(location.search);
+      if (params.get("theme") === "dark") document.body.classList.add("dark");
+      const { records, facets } = window.MOCK;
+      const archive = new Set();
+      const matches = (r, m) =>
+        (!m.status || r.status === m.status) && (!m.channel || r.channel === m.channel || r.group === m.channel) &&
+        (!m.origin || r.origin.entity_id === m.origin) &&
+        (!m.text || JSON.stringify([r.title, r.message, r.recipients]).toLowerCase().includes(m.text.toLowerCase()));
+      const hass = {
+        language: params.get("lang") ?? "de",
+        locale: { language: params.get("lang") ?? "de", time_zone: "server" },
+        config: { time_zone: "Europe/Berlin" },
+        user: { id: "user-alex", name: "Alex", is_admin: params.get("admin") !== "0" },
+        dockedSidebar: "docked",
+        states: { ...window.README_STATES },
+        connection: {
+          async sendMessagePromise(m) {
+            if (m.type.endsWith("/facets")) return facets;
+            if (m.type.endsWith("/archive")) { for (const id of m.record_ids) m.archived === false ? archive.delete(id) : archive.add(id); return { changed: m.record_ids.length }; }
+            if (m.type.endsWith("/delete")) { const i = records.findIndex((r) => r.id === m.record_id); records.splice(i, 1); return null; }
+            let list = records.filter((r) => matches(r, m) && archive.has(r.id) === Boolean(m.archived));
+            if (m.newest_first === false) list = [...list].reverse();
+            let groups;
+            if (m.group_by === "origin") {
+              const key = (r) => r.origin.entity_id ?? r.origin.kind;
+              const rank = (r) => (r.origin.entity_id ? "0" + r.origin.entity_id : "1" + r.origin.kind);
+              list = [...list].sort((x, y) => rank(x).localeCompare(rank(y)) || (m.newest_first === false ? x.time.localeCompare(y.time) : y.time.localeCompare(x.time)));
+              groups = {};
+              for (const r of list) groups[key(r)] = (groups[key(r)] ?? 0) + 1;
+            }
+            return { records: list.slice(m.offset, m.offset + m.limit), total: list.length, groups };
+          },
+          async subscribeMessage() { return async () => {}; },
+        },
+      };
+      await import("./panel.js");
+      const panel = document.createElement("notification-journal-panel");
+      panel.narrow = params.get("narrow") === "1";
+      panel.hass = hass;
+      document.body.append(panel);
+    </script>
+  </body>
+</html>

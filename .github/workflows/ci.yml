@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    container: python:3.14.10-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install
+        run: scripts/install-test-requirements.sh
+      - name: Lint
+        run: ruff check . && ruff format --check .
+      - name: Tests
+        run: python -m pytest
+
+  panel:
+    runs-on: ubuntu-latest
+    container: node:26.13.1-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check and build
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund && npm run check && npm run build
+
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: hacs/action@main
+        with:
+          category: integration

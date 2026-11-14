@@ -1,0 +1,14 @@
+{
+  "options": {
+    "step": {
+      "init": {
+        "sections": {
+          "sources": "mdi:tray-arrow-down",
+          "retention": "mdi:clock-outline",
+          "access": "mdi:account-outline",
+          "sidebar": "mdi:dock-left"
+        }
+      }
+    }
+  }
+}

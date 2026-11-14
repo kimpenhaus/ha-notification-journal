@@ -1,0 +1,52 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "automerge": true,
+  "platformAutomerge": true,
+  "prConcurrentLimit": 0,
+  "prHourlyLimit": 0,
+  "enabledManagers": [
+    "github-actions",
+    "pip_requirements",
+    "npm"
+  ],
+  "dependencyDashboard": {
+    "enabled": true,
+    "title": "Dependency Dashboard"
+  },
+  "osvVulnerabilityAlerts": true,
+  "semanticCommits": "enabled",
+  "packageRules": [
+    {
+      "description": "Python stays on the version Home Assistant runs on",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "python"
+      ],
+      "allowedVersions": "<3.15"
+    },
+    {
+      "description": "Node stays on long-term support releases",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "node"
+      ],
+      "allowedVersions": "/^[0-9]*[02468]\\./"
+    },
+    {
+      "matchDatasources": [
+        "docker"
+      ],
+      "pinDigests": true
+    }
+  ]
+}
