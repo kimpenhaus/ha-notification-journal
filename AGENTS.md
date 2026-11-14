@@ -31,6 +31,7 @@
 
 - Every change goes through a pull request with a green `ci`, merged by squash; the pull request title becomes the commit message.
 - Conventional Commit subjects: `type(scope): imperative summary`, lowercase, at most 50 characters. release-please derives the version and the changelog from them: `fix` is a patch, `feat` a minor version, `!` a breaking change.
+- `feat`, `fix` and `perf` end up in the release notes, so they describe what users notice; changes to CI, tooling or docs use `ci`, `chore` or `docs`, even when they repair something.
 - A pull request that resolves an issue has `Closes #<n>` in its description.
 - Do not edit the version in `manifest.json` or `CHANGELOG.md` by hand; release-please does that in its release pull request.
 - Do not add `Co-Authored-By`, AI attribution, or another author identity to commits, pull requests, issue comments or release notes.

@@ -1,6 +1,9 @@
 {
   "domain": "notification_journal",
   "name": "Notification Journal",
+  "categories": [
+    "messaging_notifications"
+  ],
   "codeowners": [
     "@kimpenhaus"
   ],
