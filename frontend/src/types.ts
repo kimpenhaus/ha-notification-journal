@@ -20,6 +20,13 @@ export interface Origin {
   integration?: string | null;
 }
 
+export interface Answer {
+  action: string;
+  time: string;
+  user_id: string | null;
+  reply_text: string | null;
+}
+
 export interface Call {
   channel: string;
   recipients: Recipient[];
@@ -45,6 +52,7 @@ export interface NotificationRecord {
   source_ref: string | null;
   status_time: string | null;
   status_by: Origin | null;
+  answers: Answer[];
 }
 
 export interface Page {

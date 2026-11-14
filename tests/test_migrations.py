@@ -79,7 +79,7 @@ async def test_new_database_gets_the_current_schema(tmp_path: Path) -> None:
     await store.async_close()
 
     assert _version(tmp_path / "new.db") == SCHEMA_VERSION
-    assert {"source_ref", "status_time", "status_by"} <= _columns(tmp_path / "new.db")
+    assert {"source_ref", "status_time", "status_by", "answers"} <= _columns(tmp_path / "new.db")
     assert not _backups(tmp_path)
 
 
@@ -95,8 +95,9 @@ async def test_old_database_is_migrated_after_a_backup(tmp_path: Path, version: 
     await store.async_close()
 
     assert [r.message for r in records] == ["Kept"]
+    assert records[0].answers == []
     assert _version(path) == SCHEMA_VERSION
-    assert {"source_ref", "status_time", "status_by"} <= _columns(path)
+    assert {"source_ref", "status_time", "status_by", "answers"} <= _columns(path)
     backup = tmp_path / f"old.db.bak-v{version}"
     assert _version(backup) == version
     assert "source_ref" not in _columns(backup)

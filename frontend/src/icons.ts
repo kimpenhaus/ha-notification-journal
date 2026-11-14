@@ -14,6 +14,7 @@ export {
   mdiCalendarClockOutline,
   mdiCellphone,
   mdiChatOutline,
+  mdiCheck,
   mdiCheckAll,
   mdiCheckCircle,
   mdiCheckboxBlankCircleOutline,

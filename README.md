@@ -13,6 +13,7 @@ Home Assistant forgets a notification the moment it is sent. Notification Journa
   - Home Assistant's own notifications under the bell in the sidebar (discovered devices, failed logins, `persistent_notification.create`), including when and by whom they were dismissed
   - spoken announcements with text: `tts.speak` on media players and `assist_satellite.announce` on voice satellites
   - Telegram: messages, captioned photos, videos and files, and polls sent with the Telegram bot's own actions, named after the chats
+- **Shows the answers**: the buttons of an actionable notification in the Companion app, which one was tapped, by whom and when, and the text typed into a reply button. Everyone sees their own answers; administrators see all.
 - **Shows who it reached**: notify groups are resolved into the people and devices behind them; a person's current name and picture are shown.
 - **Shows where it came from**: the automation or script that sent it, with a link to the exact trace of that run, the user who sent it by hand, or the custom integration that sent it from its own code.
 - **Two views**: a timeline by day, or grouped by automation; both sorted newest or oldest first, every day and group can be folded.
@@ -60,10 +61,11 @@ Every card shows a status:
 | Open | A notification under the bell that is still there. |
 | Dismissed | Removed from the bell, with the time and who did it. |
 | Replaced | Home Assistant replaced it under the bell with a newer one of the same ID. |
+| Answered | Someone tapped one of its buttons in the Companion app. |
 
 ## Privacy
 
-Everything stays in your Home Assistant. The journal is an SQLite database, `notification_journal.db`, next to `configuration.yaml`, separate from the recorder. It holds per notification: title, message, the data sent with it (actions, references to images and links, tags), the recipients, the automation, script, user or integration that sent it, and the time. Images and attachments themselves are not copied, only their references.
+Everything stays in your Home Assistant. The journal is an SQLite database, `notification_journal.db`, next to `configuration.yaml`, separate from the recorder. It holds per notification: title, message, the data sent with it (actions, references to images and links, tags), the recipients, the automation, script, user or integration that sent it, the answers to its buttons, and the time. Images and attachments themselves are not copied, only their references.
 
 Old entries are deleted once a day (*Retention*). The database is part of every Home Assistant backup; recording pauses while a backup is taken. Removing the integration keeps the database file; delete it by hand if you want the journal gone.
 

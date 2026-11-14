@@ -11,7 +11,7 @@ from homeassistant.const import ATTR_ENTITY_ID, EVENT_CALL_SERVICE
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import target
 
-from ..models import Call, NotificationRecord, Recipient
+from ..models import Answer, Call, NotificationRecord, Recipient
 from ..recipients import (
     NOTIFY_DOMAIN,
     SEND_MESSAGE,
@@ -23,6 +23,10 @@ from ..store import NotificationStore
 from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, as_list, new_record
 
 GROUP_CALL_WINDOW = 5.0
+EVENT_NOTIFICATION_ACTION = "mobile_app_notification_action"
+"""Fired by the Companion app when someone taps a button of a notification; its context carries their user."""
+ATTR_ACTION = "action"
+ATTR_REPLY_TEXT = "reply_text"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +49,7 @@ class NotifySource:
 
     A group calls the action of each member itself, right after its own call and in the same
     asyncio context; those calls are attached to the group's record instead of becoming records.
+    A button someone taps in the Companion app is attached to the record that offered it.
     """
 
     name = NOTIFY_DOMAIN
@@ -63,8 +68,29 @@ class NotifySource:
         self._resolver = RecipientResolver(hass)
 
     def async_start(self) -> CALLBACK_TYPE:
-        """Listen to the calls of notify actions."""
-        return self._hass.bus.async_listen(EVENT_CALL_SERVICE, self._handle, event_filter=_is_notify)
+        """Listen to the calls of notify actions and to the answers to their buttons."""
+        remove_calls = self._hass.bus.async_listen(EVENT_CALL_SERVICE, self._handle, event_filter=_is_notify)
+        remove_answers = self._hass.bus.async_listen(EVENT_NOTIFICATION_ACTION, self._handle_answer)
+
+        @callback
+        def _stop() -> None:
+            remove_calls()
+            remove_answers()
+
+        return _stop
+
+    async def _handle_answer(self, event: Event) -> None:
+        action = event.data.get(ATTR_ACTION)
+        if not action or not isinstance(action, str):
+            return
+        reply = event.data.get(ATTR_REPLY_TEXT)
+        answer = Answer(
+            action=action,
+            time=event.time_fired,
+            user_id=event.context.user_id,
+            reply_text=str(reply) if reply else None,
+        )
+        await self._store.async_add_answer(self.name, answer)
 
     @callback
     def _handle(self, event: Event) -> None:

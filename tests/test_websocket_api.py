@@ -11,6 +11,7 @@ from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 from custom_components.notification_journal import RuntimeData
 from custom_components.notification_journal.const import CONF_NON_ADMIN_VISIBILITY, DEFAULT_OPTIONS, DOMAIN
 from custom_components.notification_journal.models import (
+    Answer,
     Call,
     NotificationRecord,
     Origin,
@@ -41,7 +42,7 @@ def _record(record_id: str, message: str, recipients: list[Recipient], **kw) -> 
         channel=kw.pop("channel", "notify.phone"),
         title=None,
         message=message,
-        data=None,
+        data=kw.pop("data", None),
         recipients=recipients,
         origin=kw.pop("origin", GARAGE),
         context_id=f"ctx-{record_id}",
@@ -293,3 +294,24 @@ async def test_only_the_first_page_carries_the_counts(
     assert first["total"] > 1 and "groups" in first
     assert len(second["records"]) == 1
     assert "total" not in second and "groups" not in second
+
+
+async def test_user_sees_only_own_answers(
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    hass_admin_user: User,
+    hass_read_only_user: User,
+    hass_read_only_access_token: str,
+) -> None:
+    runtime = await _setup(hass)
+    both = [_person(hass_admin_user, "Anna"), _person(hass_read_only_user, "Ben")]
+    runtime.store.add(_record("window", "Window open", both, data={"data": {"actions": [{"action": "DONE"}]}}))
+    for user in (hass_admin_user, hass_read_only_user):
+        await runtime.store.async_add_answer("notify", Answer(action="DONE", time=dt_util.utcnow(), user_id=user.id))
+
+    async def answered(client) -> list[str]:
+        (record,) = (await _call(client, type=f"{DOMAIN}/list"))["result"]["records"]
+        return [answer["user_id"] for answer in record["answers"]]
+
+    assert await answered(await hass_ws_client(hass)) == [hass_admin_user.id, hass_read_only_user.id]
+    assert await answered(await hass_ws_client(hass, hass_read_only_access_token)) == [hass_read_only_user.id]
