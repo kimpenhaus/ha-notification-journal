@@ -263,3 +263,22 @@ async def test_archive_changes_only_the_callers_view(
     restored = await _call(reader, type=f"{DOMAIN}/archive", record_ids=["family"], archived=False)
     assert restored["result"] == {"changed": 1}
     assert (await _call(reader, type=f"{DOMAIN}/list"))["result"]["total"] == 2
+
+
+async def test_subscription_survives_a_reload_of_the_entry(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator, hass_admin_user: User
+) -> None:
+    runtime = await _setup(hass)
+    client = await hass_ws_client(hass)
+    assert (await _call(client, type=f"{DOMAIN}/subscribe"))["success"]
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.runtime_data is not runtime
+    entry.runtime_data.store.add(_record("after", "After reload", [_person(hass_admin_user, "Anna")]))
+    await entry.runtime_data.store.async_flush()
+    await hass.async_block_till_done()
+
+    event = await client.receive_json()
+    assert (event["event"]["change"], event["event"]["record"]["id"]) == ("added", "after")

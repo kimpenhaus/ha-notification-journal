@@ -131,3 +131,19 @@ async def test_setup_fails_on_a_newer_database(hass: HomeAssistant, config_dir: 
 
     assert not await hass.config_entries.async_setup(entry.entry_id)
     assert entry.state is ConfigEntryState.SETUP_ERROR
+
+
+async def test_migration_adds_missing_schema_objects(tmp_path: Path) -> None:
+    path = tmp_path / "old.db"
+    _old_database(path, 1)
+
+    store = NotificationStore(str(path))
+    await store.async_open()
+    await store.async_close()
+
+    connection = sqlite3.connect(path)
+    try:
+        names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master")}
+    finally:
+        connection.close()
+    assert {"notifications_delete", "notifications_time", "notification_users_user"} <= names

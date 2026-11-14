@@ -8,8 +8,9 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
-from .const import CONF_NON_ADMIN_VISIBILITY, DEFAULT_OPTIONS, DOMAIN, Visibility
+from .const import CONF_NON_ADMIN_VISIBILITY, DEFAULT_OPTIONS, DOMAIN, SIGNAL_CHANGED, Visibility
 from .models import NotificationRecord, RecipientKind, Status
 from .store import NotificationStore, Query
 
@@ -149,28 +150,29 @@ async def ws_facets(hass: HomeAssistant, connection: websocket_api.ActiveConnect
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/subscribe"})
 @websocket_api.async_response
 async def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
-    """Send every new or changed notification the caller may see while subscribed."""
+    """Send every new or changed notification the caller may see while subscribed, across reloads of the entry."""
     if (scope := _store_and_scope(hass, connection, msg)) is None:
         return
-    store, user_id = scope
-
-    async def _forward(change: str, record_id: str) -> None:
-        if change == "removed":
-            connection.send_message(websocket_api.event_message(msg["id"], {"change": change, "record_id": record_id}))
-            return
-        record = await store.async_get(record_id)
-        if record is None or (user_id is not None and not record.visible_to(user_id)):
-            return
-        connection.send_message(
-            websocket_api.event_message(msg["id"], {"change": change, "record": serialize(hass, record)})
-        )
+    _, user_id = scope
 
     @callback
-    def _listener(change: str, record_id: str) -> None:
-        hass.async_create_task(_forward(change, record_id), eager_start=False)
+    def _forward(change: str, record_id: str, record: NotificationRecord | None) -> None:
+        if user_id is not None and _non_admins_see_nothing(hass):
+            return
+        if record is None:
+            connection.send_message(websocket_api.event_message(msg["id"], {"change": change, "record_id": record_id}))
+        elif user_id is None or record.visible_to(user_id):
+            connection.send_message(
+                websocket_api.event_message(msg["id"], {"change": change, "record": serialize(hass, record)})
+            )
 
-    connection.subscriptions[msg["id"]] = store.async_add_listener(_listener)
+    connection.subscriptions[msg["id"]] = async_dispatcher_connect(hass, SIGNAL_CHANGED, _forward)
     connection.send_result(msg["id"])
+
+
+def _non_admins_see_nothing(hass: HomeAssistant) -> bool:
+    entries = hass.config_entries.async_loaded_entries(DOMAIN)
+    return bool(entries) and {**DEFAULT_OPTIONS, **entries[0].options}[CONF_NON_ADMIN_VISIBILITY] == Visibility.NONE
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/delete", vol.Required("record_id"): str})

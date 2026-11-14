@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -10,6 +9,7 @@ from typing import Any
 
 from homeassistant.const import ATTR_ENTITY_ID, EVENT_CALL_SERVICE
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.helpers import target
 from homeassistant.util import dt as dt_util
 from homeassistant.util.ulid import ulid_now
 
@@ -23,6 +23,7 @@ from ..recipients import (
     legacy_group_members,
 )
 from ..store import NotificationStore
+from . import TARGET_KEYS, as_list, plain
 
 ATTR_MESSAGE = "message"
 ATTR_TITLE = "title"
@@ -31,25 +32,17 @@ GROUP_CALL_WINDOW = 5.0
 
 @dataclass(frozen=True, slots=True)
 class _GroupCall:
-    record_id: str
+    record_id: str | None
+    """None when the group is excluded: its member calls are dropped too."""
     members: frozenset[str]
     context_id: str
     message: str
     started: float
+    entity_group: bool
+    """A notify group entity calls its members in its own context, a legacy group in a new one."""
 
 
 _group_call: ContextVar[_GroupCall | None] = ContextVar("notification_journal_group_call", default=None)
-
-
-def _channels(service: str, data: dict[str, Any]) -> list[str]:
-    if service != SEND_MESSAGE:
-        return [f"{NOTIFY_DOMAIN}.{service}"]
-    entity_ids = data.get(ATTR_ENTITY_ID) or []
-    return [entity_ids] if isinstance(entity_ids, str) else list(entity_ids)
-
-
-def _plain(data: dict[str, Any]) -> dict[str, Any]:
-    return json.loads(json.dumps(data, default=str))
 
 
 class NotifySource:
@@ -82,46 +75,70 @@ class NotifySource:
     def _handle(self, event: Event) -> None:
         service: str = event.data["service"]
         data: dict[str, Any] = dict(event.data.get("service_data") or {})
-        channels = _channels(service, data)
-        if not channels or self._excluded.intersection(channels):
+        channels = self._channels(service, data)
+        if not channels:
             return
         message = str(data.get(ATTR_MESSAGE, ""))
+        excluded = bool(self._excluded.intersection(channels))
 
         if (parent := _group_call.get()) is not None and self._is_inner_call(parent, event, channels, message):
-            recipients = self._recipients(service, channels)
-            for channel in channels:
-                self._store.add_inner_call(
-                    parent.record_id, Call(channel=channel, recipients=recipients, context_id=event.context.id)
-                )
+            if parent.record_id is not None and not excluded:
+                for channel in channels:
+                    call = Call(
+                        channel=channel, recipients=self._recipients(service, [channel]), context_id=event.context.id
+                    )
+                    self._store.add_inner_call(parent.record_id, call)
             return
 
-        record = self._record(event, service, data, channels, message)
-        self._store.add(record)
-        if (members := self._group_members(service, channels)) is not None:
+        members = self._group_members(service, channels)
+        record_id = None
+        if not excluded:
+            group = channels[0] if members is not None else None
+            record = self._record(event, service, data, channels, group=group)
+            self._store.add(record)
+            record_id = record.id
+        if members is not None:
             _group_call.set(
                 _GroupCall(
-                    record_id=record.id,
+                    record_id=record_id,
                     members=frozenset(members),
                     context_id=event.context.id,
                     message=message,
                     started=time.monotonic(),
+                    entity_group=service == SEND_MESSAGE,
                 )
             )
 
+    def _channels(self, service: str, data: dict[str, Any]) -> list[str]:
+        """Return the legacy action, or the notify entities a send_message call targets, areas and labels resolved."""
+        if service != SEND_MESSAGE:
+            return [f"{NOTIFY_DOMAIN}.{service}"]
+        explicit = [str(entity_id) for entity_id in as_list(data.get(ATTR_ENTITY_ID))]
+        selected = target.async_extract_referenced_entity_ids(
+            self._hass,
+            target.TargetSelection({key: data[key] for key in TARGET_KEYS if key in data}),
+            expand_group=False,
+        )
+        indirect = sorted(
+            entity_id
+            for entity_id in selected.indirectly_referenced
+            if entity_id.startswith(f"{NOTIFY_DOMAIN}.") and entity_id not in explicit
+        )
+        return explicit + indirect
+
     def _record(
-        self, event: Event, service: str, data: dict[str, Any], channels: list[str], message: str
+        self, event: Event, service: str, data: dict[str, Any], channels: list[str], *, group: str | None
     ) -> NotificationRecord:
         recipients = self._recipients(service, channels)
-        extra = {key: value for key, value in data.items() if key not in (ATTR_MESSAGE, ATTR_TITLE, ATTR_ENTITY_ID)}
-        group = channels[0] if self._group_members(service, channels) is not None else None
+        extra = {key: value for key, value in data.items() if key not in (ATTR_MESSAGE, ATTR_TITLE, *TARGET_KEYS)}
         return NotificationRecord(
             id=ulid_now(),
             time=dt_util.utcnow(),
             source=self.name,
             channel=", ".join(channels),
             title=data.get(ATTR_TITLE),
-            message=message,
-            data=_plain(extra) if extra else None,
+            message=str(data.get(ATTR_MESSAGE, "")),
+            data=plain(extra) if extra else None,
             recipients=recipients,
             origin=resolve_origin(self._hass, event.context),
             context_id=event.context.id,
@@ -155,7 +172,7 @@ class NotifySource:
     @staticmethod
     def _is_inner_call(parent: _GroupCall, event: Event, channels: list[str], message: str) -> bool:
         return (
-            event.context.id != parent.context_id
+            (event.context.id != parent.context_id or parent.entity_group)
             and parent.members.issuperset(channels)
             and message == parent.message
             and time.monotonic() - parent.started < GROUP_CALL_WINDOW

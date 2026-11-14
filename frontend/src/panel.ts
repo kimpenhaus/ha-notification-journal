@@ -267,7 +267,14 @@ export class NotificationJournalPanel extends LitElement {
       if (request !== this._request) return;
       if (more) {
         const known = new Set(this._records.map((record) => record.id));
-        this._records = [...this._records, ...page.records.filter((record) => !known.has(record.id))];
+        const fresh = page.records.filter((record) => !known.has(record.id));
+        this._records = [...this._records, ...fresh];
+        if (!fresh.length) {
+          // A record that arrived meanwhile shifted the offsets; what the server counts is already loaded.
+          this._total = this._records.length;
+          this._groups = page.groups ?? this._groups;
+          return;
+        }
       } else {
         this._records = page.records;
         this._pending = 0;
@@ -296,16 +303,21 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private _received(event: RecordEvent): void {
-    if (event.change === "removed") {
-      this._removed(event.record_id);
+    if (event.change === "removed" || event.change === "purged") {
+      if (event.change === "removed") {
+        this._removed(event.record_id);
+      } else {
+        void this._load();
+        void this._loadFacets();
+      }
       return;
     }
     const { change, record } = event;
     const index = this._records.findIndex((known) => known.id === record.id);
     if (index >= 0) {
       this._records = this._records.map((known, position) => (position === index ? record : known));
-    } else if (change === "added" || this._isNewest(record)) {
-      if (this._unfiltered && this._complete && !this._archived) {
+    } else if (change === "added" && !this._archived) {
+      if (this._unfiltered && this._complete) {
         this._records = [record, ...this._records];
         this._total += 1;
         this._arrange();
@@ -390,11 +402,6 @@ export class NotificationJournalPanel extends LitElement {
     return [...new Set(keys)];
   }
 
-  private _isNewest(record: NotificationRecord): boolean {
-    const newest = this._filters.newestFirst ? this._records[0] : this._records[this._records.length - 1];
-    return !newest || Date.parse(record.time) >= Date.parse(newest.time);
-  }
-
   private get _unfiltered(): boolean {
     const filters = this._filters;
     return !filters.text.trim() && !filters.status && !filters.origin && !filters.period;
@@ -432,7 +439,6 @@ export class NotificationJournalPanel extends LitElement {
     this._view = view;
     store(VIEW_KEY, view);
     this._collapsed = new Set();
-    this._archived = false;
     this._selecting = false;
     this._selected = new Set();
     this.renderRoot.querySelector(".content")?.scrollTo({ top: 0 });
