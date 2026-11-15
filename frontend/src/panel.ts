@@ -835,7 +835,7 @@ export class NotificationJournalPanel extends LitElement {
       height: 100%;
       background: var(--primary-background-color);
       color: var(--primary-text-color);
-      font-family: var(--ha-font-family-body, var(--paper-font-body1_-_font-family, Roboto, sans-serif));
+      font-family: var(--ha-font-family-body);
       -webkit-font-smoothing: antialiased;
     }
     .toolbar {
@@ -846,9 +846,9 @@ export class NotificationJournalPanel extends LitElement {
       box-sizing: border-box;
       height: calc(var(--header-height, 56px) + var(--safe-area-inset-top, 0px));
       padding: var(--safe-area-inset-top, 0px) 8px 0 12px;
-      background: var(--app-header-background-color, var(--primary-color, #03a9f4));
-      color: var(--app-header-text-color, #fff);
-      border-bottom: var(--app-header-border-bottom, none);
+      background: var(--app-header-background-color);
+      color: var(--app-header-text-color);
+      border-bottom: var(--app-header-border-bottom);
     }
     h1 {
       flex: 1;
@@ -912,12 +912,12 @@ export class NotificationJournalPanel extends LitElement {
       height: 48px;
       padding: 0 8px 0 14px;
       border-radius: 24px;
-      background: var(--card-background-color, #fff);
-      border: 1px solid var(--divider-color, #e0e0e0);
+      background: var(--card-background-color);
+      border: 1px solid var(--divider-color);
       color: var(--secondary-text-color);
     }
     .search:focus-within {
-      border-color: var(--primary-color, #03a9f4);
+      border-color: var(--primary-color);
     }
     .search input {
       flex: 1;
@@ -967,8 +967,8 @@ export class NotificationJournalPanel extends LitElement {
       height: 34px;
       padding: 0 32px 0 14px;
       border-radius: 17px;
-      border: 1px solid var(--divider-color, #e0e0e0);
-      background: var(--card-background-color, #fff);
+      border: 1px solid var(--divider-color);
+      background: var(--card-background-color);
       color: var(--primary-text-color);
       font: inherit;
       font-size: 0.875rem;
@@ -976,13 +976,13 @@ export class NotificationJournalPanel extends LitElement {
       cursor: pointer;
     }
     .select.active select {
-      border-color: var(--primary-color, #03a9f4);
-      background: color-mix(in srgb, var(--primary-color, #03a9f4) 12%, var(--card-background-color, #fff));
+      border-color: var(--primary-color);
+      background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
     }
     option,
     optgroup {
       color: var(--primary-text-color);
-      background: var(--card-background-color, #fff);
+      background: var(--card-background-color);
     }
     .sort {
       display: inline-flex;
@@ -997,7 +997,7 @@ export class NotificationJournalPanel extends LitElement {
     }
     select:focus-visible,
     button:focus-visible {
-      outline: 2px solid var(--primary-color, #03a9f4);
+      outline: 2px solid var(--primary-color);
       outline-offset: 2px;
     }
     .summary {
@@ -1016,7 +1016,7 @@ export class NotificationJournalPanel extends LitElement {
       border: none;
       border-radius: 6px;
       background: none;
-      color: var(--primary-color, #03a9f4);
+      color: var(--primary-color);
       font: inherit;
       font-size: 0.875rem;
       font-weight: 500;
@@ -1027,10 +1027,10 @@ export class NotificationJournalPanel extends LitElement {
       height: 18px;
     }
     .text-button:hover {
-      background: color-mix(in srgb, var(--primary-color, #03a9f4) 10%, transparent);
+      background: color-mix(in srgb, var(--primary-color) 10%, transparent);
     }
     .text-button[disabled] {
-      color: var(--disabled-text-color, #9e9e9e);
+      color: var(--disabled-text-color);
       cursor: default;
     }
     .list.busy {
@@ -1099,7 +1099,7 @@ export class NotificationJournalPanel extends LitElement {
     }
     .notice {
       margin-left: 12px;
-      color: var(--error-color, #db4437);
+      color: var(--error-color);
     }
     .group-icon {
       display: grid;
@@ -1107,8 +1107,8 @@ export class NotificationJournalPanel extends LitElement {
       width: 32px;
       height: 32px;
       border-radius: 50%;
-      color: var(--primary-color, #03a9f4);
-      background: color-mix(in srgb, var(--primary-color, #03a9f4) 14%, transparent);
+      color: var(--primary-color);
+      background: color-mix(in srgb, var(--primary-color) 14%, transparent);
     }
     .group-icon .icon {
       width: 18px;
@@ -1133,7 +1133,7 @@ export class NotificationJournalPanel extends LitElement {
       font-size: 0.8rem;
       text-align: center;
       color: var(--secondary-text-color);
-      background: var(--secondary-background-color, #e5e5e5);
+      background: var(--secondary-background-color);
     }
     .view {
       display: inline-flex;
@@ -1141,8 +1141,8 @@ export class NotificationJournalPanel extends LitElement {
       padding: 2px;
       box-sizing: border-box;
       border-radius: 17px;
-      border: 1px solid var(--divider-color, #e0e0e0);
-      background: var(--card-background-color, #fff);
+      border: 1px solid var(--divider-color);
+      background: var(--card-background-color);
     }
     .view button {
       display: inline-flex;
@@ -1168,8 +1168,8 @@ export class NotificationJournalPanel extends LitElement {
       gap: 8px;
     }
     .toolbar.selecting {
-      background: var(--primary-color, #03a9f4);
-      color: var(--text-primary-color, #fff);
+      background: var(--primary-color);
+      color: var(--text-primary-color);
     }
     .toolbar-button {
       display: inline-flex;
@@ -1201,8 +1201,8 @@ export class NotificationJournalPanel extends LitElement {
       cursor: default;
     }
     .view button.selected {
-      color: var(--text-primary-color, #fff);
-      background: var(--primary-color, #03a9f4);
+      color: var(--text-primary-color);
+      background: var(--primary-color);
     }
     .pending {
       position: sticky;
@@ -1213,12 +1213,12 @@ export class NotificationJournalPanel extends LitElement {
       padding: 8px 18px;
       border: none;
       border-radius: 18px;
-      background: var(--primary-color, #03a9f4);
-      color: var(--text-primary-color, #fff);
+      background: var(--primary-color);
+      color: var(--text-primary-color);
       font: inherit;
       font-size: 0.875rem;
       font-weight: 500;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+      box-shadow: 0 2px 6px var(--shadow-color);
       cursor: pointer;
     }
     .sentinel {

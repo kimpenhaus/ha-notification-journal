@@ -25,7 +25,7 @@
 - `README.md` is for users (what it does, installation, options, privacy); how it is built, tested and released goes into `docs/DEVELOPMENT.md`. Its section *How this project was made* is wanted by the maintainer and stays.
 - Log at `warning` and above for what a user has to act on; routine operation logs at `debug`.
 - Only add a comment when the reader cannot derive it from the code.
-- The panel uses the theme's CSS variables and the `hass` object only, no internal `ha-*` components of the Home Assistant frontend apart from `ha-icon` with a fallback; its texts live in `frontend/src/localize.ts` with `en` and `de`.
+- The panel uses the theme's CSS variables and the `hass` object only: no colour, font or shadow of its own and no fallback for a variable Home Assistant always sets (only the optional `--ha-card-*` ones get one, as in `ha-card`), no internal `ha-*` components of the Home Assistant frontend apart from `ha-icon` with a fallback; its texts live in `frontend/src/localize.ts` with `en` and `de`.
 
 ## Commits, Pull Requests and Releases
 
