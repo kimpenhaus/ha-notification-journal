@@ -18,6 +18,7 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from .const import INTEGRATION_KEY_PREFIX
 from .models import (
     EVERYONE,
     Answer,
@@ -37,7 +38,9 @@ SCHEMA_VERSION = 4
 VISIBLE_TO_USER = f"rowid IN (SELECT notification FROM notification_users WHERE user_id IN (?, '{EVERYONE}'))"
 BACKUP_PAUSE_LIMIT = 1800
 MIGRATION_COPY_DAYS = 7
-ORIGIN_GROUP = "coalesce(origin_entity_id, 'integration.' || json_extract(origin, '$.integration'), origin_kind)"
+ORIGIN_GROUP = (
+    f"coalesce(origin_entity_id, '{INTEGRATION_KEY_PREFIX}' || json_extract(origin, '$.integration'), origin_kind)"
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notifications (
@@ -229,7 +232,10 @@ class NotificationStore:
         return await self._run(self._open_records, source)
 
     async def async_facets(self, user_id: str | None) -> dict[str, list[dict[str, str | None]]]:
-        """Return the automations and scripts that sent notifications, limited to a user's records if given."""
+        """Return the automations and scripts that sent notifications, limited to a user's records if given.
+
+        Each comes with the name stored with its newest notification (SQLite takes the bare column from the row of max).
+        """
         return await self._run(self._facets, user_id)
 
     async def async_get(self, record_id: str) -> NotificationRecord | None:
@@ -552,8 +558,8 @@ class NotificationStore:
         origins = (
             self._db()
             .execute(
-                f"SELECT origin_entity_id, json_extract(origin, '$.name') FROM notifications {where} "
-                "origin_entity_id IS NOT NULL GROUP BY origin_entity_id ORDER BY 2",
+                f"SELECT origin_entity_id, json_extract(origin, '$.name'), max(time) FROM notifications {where} "
+                "origin_entity_id IS NOT NULL GROUP BY origin_entity_id",
                 params,
             )
             .fetchall()
