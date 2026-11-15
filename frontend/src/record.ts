@@ -1,6 +1,6 @@
 import { css, html, LitElement, nothing, type TemplateResult } from "lit";
 
-import { channelLabel, type Clock, dateTimeText, dayKey, hue, initials, shortDateTimeText, timeText } from "./format";
+import { channelLabel, type Clock, dateTimeText, dayKey, initials, shortDateTimeText, timeText } from "./format";
 import {
   icon,
   mdiAccountGroupOutline,
@@ -81,16 +81,16 @@ function offeredButtons(record: NotificationRecord): Button[] {
   });
 }
 
-function personAvatar(id: string, name: string, picture: string | null): TemplateResult {
+function personAvatar(name: string, picture: string | null): TemplateResult {
   return picture
     ? html`<img class="avatar" src=${picture} alt="" loading="lazy" />`
-    : html`<span class="avatar initials" style="--avatar-hue: ${hue(id)}">${initials(name)}</span>`;
+    : html`<span class="avatar initials">${initials(name)}</span>`;
 }
 
 export function recipientChip(recipient: Recipient): TemplateResult {
   let avatar: TemplateResult;
   if (recipient.kind === "person") {
-    avatar = personAvatar(recipient.id, recipient.name, recipient.picture);
+    avatar = personAvatar(recipient.name, recipient.picture);
   } else {
     avatar = html`<span class="avatar device">${icon(DEVICE_ICONS[recipient.kind] ?? mdiBellOutline)}</span>`;
   }
@@ -282,7 +282,7 @@ export class NotificationJournalRecord extends LitElement {
   private _reply(answer: Answer): TemplateResult {
     const who = this._answerer(answer);
     return html`<div class="reply">
-      ${personAvatar(who.id, who.name, who.picture)}
+      ${personAvatar(who.name, who.picture)}
       <p>${answer.reply_text}<span class="by">${who.name}, ${this._answerTime(answer)}</span></p>
     </div>`;
   }
@@ -291,7 +291,7 @@ export class NotificationJournalRecord extends LitElement {
     const who = this._answerer(answer);
     const title = buttons.find((button) => button.action === answer.action)?.title ?? answer.action;
     return html`<li>
-      ${personAvatar(who.id, who.name, who.picture)}
+      ${personAvatar(who.name, who.picture)}
       <span>${who.name}: <b>${title}</b>${answer.reply_text ? html` „${answer.reply_text}“` : nothing}</span>
       <span class="by">${this._answerTime(answer)}</span>
     </li>`;
@@ -422,36 +422,36 @@ export class NotificationJournalRecord extends LitElement {
       display: block;
     }
     .card {
-      --status-color: var(--info-color, #039be5);
+      --status-color: var(--info-color);
       display: flex;
       gap: 14px;
       padding: 14px 16px 6px;
-      background: var(--card-background-color, #fff);
+      background: var(--card-background-color);
       border-radius: var(--ha-card-border-radius, 12px);
-      border: var(--ha-card-border-width, 1px) solid var(--ha-card-border-color, var(--divider-color, #e0e0e0));
+      border: var(--ha-card-border-width, 1px) solid var(--ha-card-border-color, var(--divider-color));
       box-shadow: var(--ha-card-box-shadow, none);
       border-left: 4px solid var(--status-color);
     }
     .card.delivered,
     .card.answered {
-      --status-color: var(--success-color, #43a047);
+      --status-color: var(--success-color);
     }
     .card.failed {
-      --status-color: var(--error-color, #db4437);
+      --status-color: var(--error-color);
     }
     .card.dismissed,
     .card.replaced {
-      --status-color: var(--secondary-text-color, #727272);
+      --status-color: var(--secondary-text-color);
     }
     .message a {
-      color: var(--primary-color, #03a9f4);
+      color: var(--primary-color);
     }
     .message code {
-      font-family: var(--ha-font-family-code, monospace);
+      font-family: var(--ha-font-family-code);
       font-size: 0.9em;
       padding: 0 4px;
       border-radius: 4px;
-      background: var(--secondary-background-color, #f5f5f5);
+      background: var(--secondary-background-color);
     }
     .status-note {
       margin: 6px 0 0;
@@ -472,8 +472,8 @@ export class NotificationJournalRecord extends LitElement {
       user-select: none;
     }
     .card.selected {
-      border-color: var(--primary-color, #03a9f4);
-      background: color-mix(in srgb, var(--primary-color, #03a9f4) 8%, var(--card-background-color, #fff));
+      border-color: var(--primary-color);
+      background: color-mix(in srgb, var(--primary-color) 8%, var(--card-background-color));
     }
     .check {
       display: grid;
@@ -483,7 +483,7 @@ export class NotificationJournalRecord extends LitElement {
       color: var(--secondary-text-color);
     }
     .card.selected .check {
-      color: var(--primary-color, #03a9f4);
+      color: var(--primary-color);
     }
     .check .icon {
       width: 26px;
@@ -564,8 +564,8 @@ export class NotificationJournalRecord extends LitElement {
       margin: 8px 0 0;
       padding: 8px 10px;
       border-radius: 8px;
-      color: var(--error-color, #db4437);
-      background: color-mix(in srgb, var(--error-color, #db4437) 10%, transparent);
+      color: var(--error-color);
+      background: color-mix(in srgb, var(--error-color) 10%, transparent);
       overflow-wrap: anywhere;
     }
     .indent {
@@ -587,13 +587,13 @@ export class NotificationJournalRecord extends LitElement {
       gap: 6px;
       padding: 4px 10px;
       border-radius: 8px;
-      border: 1px solid var(--divider-color, #e0e0e0);
+      border: 1px solid var(--divider-color);
       color: var(--secondary-text-color);
       font-size: 0.85rem;
       overflow-wrap: anywhere;
     }
     .button.chosen {
-      --answer-color: var(--success-color, #43a047);
+      --answer-color: var(--success-color);
       border-color: var(--answer-color);
       color: var(--answer-color);
       background: color-mix(in srgb, var(--answer-color) 12%, transparent);
@@ -614,7 +614,7 @@ export class NotificationJournalRecord extends LitElement {
       align-items: flex-start;
       padding: 8px 10px;
       border-radius: 10px;
-      background: var(--secondary-background-color, #f5f5f5);
+      background: var(--secondary-background-color);
     }
     .reply p {
       margin: 0;
@@ -659,7 +659,7 @@ export class NotificationJournalRecord extends LitElement {
       box-sizing: border-box;
       padding: 2px 10px;
       border-radius: 14px;
-      border: 1px solid var(--divider-color, #e0e0e0);
+      border: 1px solid var(--divider-color);
       background: none;
       color: var(--primary-text-color);
       font: inherit;
@@ -678,17 +678,17 @@ export class NotificationJournalRecord extends LitElement {
       flex: none;
     }
     .chip.origin {
-      background: color-mix(in srgb, var(--primary-color, #03a9f4) 8%, transparent);
+      background: color-mix(in srgb, var(--primary-color) 8%, transparent);
       border-color: transparent;
     }
     a.chip.link:hover,
     button.chip:hover {
-      border-color: var(--primary-color, #03a9f4);
+      border-color: var(--primary-color);
     }
     a.chip.link .icon:last-child {
       width: 14px;
       height: 14px;
-      color: var(--primary-color, #03a9f4);
+      color: var(--primary-color);
     }
     button.chip {
       cursor: pointer;
@@ -706,13 +706,13 @@ export class NotificationJournalRecord extends LitElement {
       border-radius: 9px;
       font-size: 0.75rem;
       text-align: center;
-      color: var(--text-primary-color, #fff);
-      background: var(--primary-color, #03a9f4);
+      color: var(--text-primary-color);
+      background: var(--primary-color);
     }
     .recipient {
       padding-left: 2px;
       border-color: transparent;
-      background: var(--secondary-background-color, #f5f5f5);
+      background: var(--secondary-background-color);
     }
     .avatar {
       width: 24px;
@@ -726,13 +726,13 @@ export class NotificationJournalRecord extends LitElement {
       place-items: center;
       font-size: 0.7rem;
       font-weight: 600;
-      color: #fff;
-      background: hsl(var(--avatar-hue) 45% 45%);
+      color: var(--text-light-primary-color);
+      background: var(--light-primary-color);
     }
     .avatar.device {
       display: grid;
       place-items: center;
-      background: var(--card-background-color, #fff);
+      background: var(--card-background-color);
     }
     .avatar.device .icon {
       width: 15px;
@@ -749,7 +749,7 @@ export class NotificationJournalRecord extends LitElement {
       margin-top: 12px;
       padding: 10px 12px;
       border-radius: 8px;
-      background: var(--secondary-background-color, #f5f5f5);
+      background: var(--secondary-background-color);
     }
     h4 {
       margin: 0 0 6px;
@@ -772,13 +772,13 @@ export class NotificationJournalRecord extends LitElement {
       padding: 6px 0;
     }
     li + li {
-      border-top: 1px solid var(--divider-color, #e0e0e0);
+      border-top: 1px solid var(--divider-color);
     }
     li .chips {
       margin: 0;
     }
     li .recipient {
-      background: var(--card-background-color, #fff);
+      background: var(--card-background-color);
     }
     .call-channel {
       display: inline-flex;
@@ -805,7 +805,7 @@ export class NotificationJournalRecord extends LitElement {
     }
     code,
     pre {
-      font-family: var(--code-font-family, ui-monospace, SFMono-Regular, Menlo, monospace);
+      font-family: var(--ha-font-family-code);
       font-size: 0.8rem;
     }
     .details h4 {
@@ -817,7 +817,7 @@ export class NotificationJournalRecord extends LitElement {
       border-radius: 6px;
       overflow-x: auto;
       color: var(--primary-text-color);
-      background: var(--card-background-color, #fff);
+      background: var(--card-background-color);
     }
     .more {
       display: flex;
@@ -834,7 +834,7 @@ export class NotificationJournalRecord extends LitElement {
       cursor: pointer;
     }
     .more:hover {
-      color: var(--primary-color, #03a9f4);
+      color: var(--primary-color);
     }
     .more .icon {
       transition: transform 0.15s;
@@ -844,7 +844,7 @@ export class NotificationJournalRecord extends LitElement {
     }
     button:focus-visible,
     a:focus-visible {
-      outline: 2px solid var(--primary-color, #03a9f4);
+      outline: 2px solid var(--primary-color);
       outline-offset: 2px;
     }
     @media (max-width: 600px) {

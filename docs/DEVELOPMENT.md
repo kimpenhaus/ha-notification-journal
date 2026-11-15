@@ -29,7 +29,7 @@ The origin comes from the trace context variable of the running automation or sc
 
 ## Panel
 
-TypeScript with [Lit](https://lit.dev), bundled by esbuild into `custom_components/notification_journal/frontend/panel.js`; the bundle is not committed, the CI and the release build it. It uses only the theme's CSS variables, the `hass` object Home Assistant passes in and `ha-icon` (for the icons of automations and scripts, with an own fallback), no other frontend components, so it does not break when those change. The integration serves the scripts (`panel.js`, `iconset.js`) itself with `Cache-Control: no-cache`, so a new panel reaches the browser on the next load without a restart.
+TypeScript with [Lit](https://lit.dev), bundled by esbuild into `custom_components/notification_journal/frontend/panel.js`; the bundle is not committed, the CI and the release build it. It uses only the theme's CSS variables (no colours or fonts of its own, so every theme applies, light and dark), the `hass` object Home Assistant passes in and `ha-icon` (for the icons of automations and scripts, with an own fallback), no other frontend components, so it does not break when those change. The integration serves the scripts (`panel.js`, `iconset.js`) itself with `Cache-Control: no-cache`, so a new panel reaches the browser on the next load without a restart.
 
 The panel is registered with `frontend.async_register_built_in_panel` as a custom panel, because `panel_custom.async_register_panel` cannot hide it from the sidebar. Changed options reload the entry, which registers the panel anew.
 
