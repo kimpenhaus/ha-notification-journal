@@ -12,6 +12,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import CONF_NON_ADMIN_VISIBILITY, DEFAULT_OPTIONS, DOMAIN, SIGNAL_CHANGED, Visibility
 from .models import NotificationRecord, RecipientKind, Status
+from .origin import OriginNames, origin_key
 from .store import NotificationStore, Query
 
 MAX_LIMIT = 200
@@ -58,12 +59,14 @@ def serialize(
     hass: HomeAssistant,
     record: NotificationRecord,
     people: dict[str, State] | None = None,
+    names: OriginNames | None = None,
     *,
     user_id: str | None = None,
 ) -> dict[str, Any]:
-    """Return a record as the panel uses it: people with their current name and picture, and the path to its trace.
+    """Return a record as the panel uses it: people and origins with their current names, and the path to its trace.
 
-    A caller limited to one user sees only that user's answers to the buttons.
+    A caller limited to one user sees only that user's answers to the buttons. Pass `people` and `names` when
+    serializing several records, so each person and origin is looked up once.
     """
     result = record.as_dict()
     if user_id is not None:
@@ -74,7 +77,12 @@ def serialize(
         if recipient["kind"] == RecipientKind.PERSON and (state := people.get(recipient["id"])):
             recipient["name"] = state.name
             recipient["picture"] = state.attributes.get("entity_picture")
+    if names is None:
+        names = OriginNames(hass)
     origin = record.origin
+    result["origin"]["name"] = names.name(origin_key(origin), origin.name)
+    if record.status_by is not None:
+        result["status_by"]["name"] = names.name(origin_key(record.status_by), record.status_by.name)
     result["trace_path"] = None
     if origin.trace_key and origin.run_id:
         domain, _, item_id = origin.trace_key.partition(".")
@@ -125,7 +133,8 @@ async def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
         )
     )
     people = _people(hass)
-    result: dict[str, Any] = {"records": [serialize(hass, r, people, user_id=user_id) for r in page.records]}
+    names = OriginNames(hass)
+    result: dict[str, Any] = {"records": [serialize(hass, r, people, names, user_id=user_id) for r in page.records]}
     if page.total is not None:
         result["total"] = page.total
     if page.groups is not None:
@@ -150,11 +159,15 @@ async def ws_get(hass: HomeAssistant, connection: websocket_api.ActiveConnection
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/facets", vol.Optional("user_id"): str})
 @websocket_api.async_response
 async def ws_facets(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
-    """Return what the filters can offer: the automations and scripts that sent notifications."""
+    """Return what the filters can offer: the automations and scripts that sent notifications, by current name."""
     if (scope := _store_and_scope(hass, connection, msg)) is None:
         return
     store, user_id = scope
-    connection.send_result(msg["id"], await store.async_facets(user_id))
+    facets = await store.async_facets(user_id)
+    names = OriginNames(hass)
+    origins = [{"id": o["id"], "name": names.name(o["id"], o["name"])} for o in facets["origins"]]
+    origins.sort(key=lambda o: (o["name"] or o["id"] or "").casefold())
+    connection.send_result(msg["id"], {"origins": origins})
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/subscribe"})

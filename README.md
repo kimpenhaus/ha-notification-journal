@@ -14,7 +14,7 @@ Home Assistant forgets a notification the moment it is sent. Notification Journa
   - spoken announcements with text: `tts.speak` on media players and `assist_satellite.announce` on voice satellites
   - Telegram: messages, captioned photos, videos and files, and polls sent with the Telegram bot's own actions, named after the chats
 - **Shows the answers**: the buttons of an actionable notification in the Companion app, which one was tapped, by whom and when, and the text typed into a reply button. Everyone sees their own answers; administrators see all.
-- **Shows who it reached**: notify groups are resolved into the people and devices behind them; a person's current name and picture are shown.
+- **Shows who it reached**: notify groups are resolved into the people and devices behind them; a person's current name and picture are shown, and automations, scripts and integrations appear under their current name.
 - **Shows where it came from**: the automation or script that sent it, with a link to the exact trace of that run, the user who sent it by hand, or the custom integration that sent it from its own code.
 - **Two views**: a timeline by day, or grouped by automation; both sorted newest or oldest first, every day and group can be folded.
 - **Search and filters**: full-text search over title, message, recipients and origin; filters for status, origin and period.

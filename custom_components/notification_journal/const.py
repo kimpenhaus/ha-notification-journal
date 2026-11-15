@@ -7,6 +7,7 @@ DOMAIN: Final = "notification_journal"
 TITLE: Final = "Notification Journal"
 DATABASE_FILE: Final = "notification_journal.db"
 SIGNAL_CHANGED: Final = "notification_journal_changed"
+INTEGRATION_KEY_PREFIX: Final = "integration."
 
 PANEL_URL_PATH: Final = "notification-journal"
 PANEL_COMPONENT: Final = "notification-journal-panel"

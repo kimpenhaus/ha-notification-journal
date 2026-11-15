@@ -9,7 +9,7 @@ from homeassistant.helpers.frame import MissingIntegrationFrame, get_integration
 from homeassistant.helpers.trace import trace_id_get
 from homeassistant.loader import IntegrationNotLoaded, async_get_loaded_integration
 
-from .const import DOMAIN
+from .const import DOMAIN, INTEGRATION_KEY_PREFIX
 from .models import Origin, OriginKind
 
 KINDS = {"automation": OriginKind.AUTOMATION, "script": OriginKind.SCRIPT}
@@ -53,8 +53,50 @@ def _calling_integration(hass: HomeAssistant) -> Origin:
     if not frame.custom_integration:
         return Origin(kind=OriginKind.SYSTEM)
     domain = frame.integration
+    return Origin(kind=OriginKind.INTEGRATION, name=_integration_name(hass, domain) or domain, integration=domain)
+
+
+def _integration_name(hass: HomeAssistant, domain: str) -> str | None:
     try:
-        name = async_get_loaded_integration(hass, domain).name
+        return async_get_loaded_integration(hass, domain).name
     except IntegrationNotLoaded:
-        name = domain
-    return Origin(kind=OriginKind.INTEGRATION, name=name, integration=domain)
+        return None
+
+
+def origin_key(origin: Origin) -> str | None:
+    """Return what identifies an origin across notifications: its automation or script, or its integration."""
+    if origin.entity_id:
+        return origin.entity_id
+    if origin.integration:
+        return f"{INTEGRATION_KEY_PREFIX}{origin.integration}"
+    return None
+
+
+class OriginNames:
+    """The current names of origins while answering one request.
+
+    Each origin is looked up once, however many notifications it sent, and only in memory: the state machine, the
+    entity registry and the loaded integrations.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Start without any names."""
+        self._hass = hass
+        self._names: dict[str, str | None] = {}
+
+    def name(self, key: str | None, stored: str | None) -> str | None:
+        """Return the current name of the origin with this key, else the stored one."""
+        if key is None:
+            return stored
+        if key not in self._names:
+            self._names[key] = self._lookup(key)
+        return self._names[key] or stored
+
+    def _lookup(self, key: str) -> str | None:
+        if key.startswith(INTEGRATION_KEY_PREFIX):
+            return _integration_name(self._hass, key.removeprefix(INTEGRATION_KEY_PREFIX))
+        if state := self._hass.states.get(key):
+            return state.name
+        if entry := er.async_get(self._hass).async_get(key):
+            return entry.name or entry.original_name
+        return None

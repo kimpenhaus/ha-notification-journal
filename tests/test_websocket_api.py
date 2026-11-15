@@ -1,9 +1,11 @@
 """Tests of the WebSocket commands and who sees what."""
 
 from datetime import timedelta
+from unittest.mock import patch
 
 from homeassistant.auth.models import User
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
@@ -20,6 +22,7 @@ from custom_components.notification_journal.models import (
     RecipientKind,
     Status,
 )
+from custom_components.notification_journal.origin import OriginNames
 
 GARAGE = Origin(
     kind=OriginKind.AUTOMATION,
@@ -315,3 +318,72 @@ async def test_user_sees_only_own_answers(
 
     assert await answered(await hass_ws_client(hass)) == [hass_admin_user.id, hass_read_only_user.id]
     assert await answered(await hass_ws_client(hass, hass_read_only_access_token)) == [hass_read_only_user.id]
+
+
+def _automation(entity_id: str, name: str) -> Origin:
+    return Origin(kind=OriginKind.AUTOMATION, entity_id=entity_id, name=name)
+
+
+async def test_origins_show_their_current_name(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator, hass_admin_user: User
+) -> None:
+    runtime = await _setup(hass)
+    anna = [_person(hass_admin_user, "Anna")]
+    registered = er.async_get(hass).async_get_or_create("script", "script", "away", suggested_object_id="away")
+    er.async_get(hass).async_update_entity(registered.entity_id, name="Leaving home")
+    runtime.store.add(_record("renamed", "a", anna, age=timedelta(minutes=4)))
+    runtime.store.add(
+        _record("deleted", "b", anna, origin=_automation("automation.old", "Old lamp"), age=timedelta(minutes=3))
+    )
+    runtime.store.add(
+        _record("registry", "c", anna, origin=_automation(registered.entity_id, "Away"), age=timedelta(minutes=2))
+    )
+    runtime.store.add(
+        _record(
+            "integration", "d", anna, origin=Origin(kind=OriginKind.INTEGRATION, name="Journal", integration=DOMAIN)
+        )
+    )
+    await runtime.store.async_flush()
+    hass.states.async_set("automation.garage", "on", {"friendly_name": "Garage gate"})
+    client = await hass_ws_client(hass)
+
+    records = (await _call(client, type=f"{DOMAIN}/list", newest_first=False))["result"]["records"]
+    assert [r["origin"]["name"] for r in records] == ["Garage gate", "Old lamp", "Leaving home", "Notification Journal"]
+    assert (await _call(client, type=f"{DOMAIN}/get", record_id="renamed"))["result"]["origin"]["name"] == "Garage gate"
+
+
+async def test_facets_name_origins_by_current_or_newest_name(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator, hass_admin_user: User
+) -> None:
+    runtime = await _setup(hass)
+    anna = [_person(hass_admin_user, "Anna")]
+    runtime.store.add(
+        _record("first", "a", anna, origin=_automation("automation.old", "First name"), age=timedelta(minutes=3))
+    )
+    runtime.store.add(
+        _record("second", "b", anna, origin=_automation("automation.old", "Second name"), age=timedelta(minutes=2))
+    )
+    runtime.store.add(_record("garage", "c", anna, age=timedelta(minutes=1)))
+    await runtime.store.async_flush()
+    hass.states.async_set("automation.garage", "on", {"friendly_name": "Garage gate"})
+
+    facets = (await _call(await hass_ws_client(hass), type=f"{DOMAIN}/facets"))["result"]
+    assert facets == {
+        "origins": [{"id": "automation.garage", "name": "Garage gate"}, {"id": "automation.old", "name": "Second name"}]
+    }
+
+
+async def test_each_origin_is_looked_up_once_per_request(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator, hass_admin_user: User
+) -> None:
+    runtime = await _setup(hass)
+    for number in range(20):
+        runtime.store.add(_record(f"n{number}", "Garage open", [_person(hass_admin_user, "Anna")]))
+    await runtime.store.async_flush()
+    client = await hass_ws_client(hass)
+
+    with patch.object(OriginNames, "_lookup", autospec=True, return_value="Garage gate") as lookup:
+        records = (await _call(client, type=f"{DOMAIN}/list"))["result"]["records"]
+    assert len(records) == 20
+    assert {r["origin"]["name"] for r in records} == {"Garage gate"}
+    assert lookup.call_count == 1
