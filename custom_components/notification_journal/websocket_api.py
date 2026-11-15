@@ -1,7 +1,8 @@
-"""WebSocket commands the panel uses: list, get, facets and live updates."""
+"""WebSocket commands the panel uses: list, get, facets, statistics and live updates."""
 
 from __future__ import annotations
 
+from datetime import tzinfo
 from typing import Any
 
 import voluptuous as vol
@@ -9,10 +10,12 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.util import dt as dt_util
 
 from .const import CONF_NON_ADMIN_VISIBILITY, DEFAULT_OPTIONS, DOMAIN, SIGNAL_CHANGED, Visibility
 from .models import NotificationRecord, RecipientKind, Status
 from .origin import OriginNames, origin_key
+from .statistics import PERIOD_KINDS, period, summarize
 from .store import NotificationStore, Query
 
 MAX_LIMIT = 200
@@ -27,6 +30,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_list)
     websocket_api.async_register_command(hass, ws_get)
     websocket_api.async_register_command(hass, ws_facets)
+    websocket_api.async_register_command(hass, ws_statistics)
     websocket_api.async_register_command(hass, ws_subscribe)
     websocket_api.async_register_command(hass, ws_delete)
     websocket_api.async_register_command(hass, ws_archive)
@@ -119,7 +123,7 @@ async def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
             user_id=user_id,
             text=msg.get("text"),
             channel=msg.get("channel"),
-            origin_entity_id=msg.get("origin"),
+            origin=msg.get("origin"),
             status=Status(msg["status"]) if "status" in msg else None,
             since=msg.get("since"),
             until=msg.get("until"),
@@ -159,7 +163,11 @@ async def ws_get(hass: HomeAssistant, connection: websocket_api.ActiveConnection
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/facets", vol.Optional("user_id"): str})
 @websocket_api.async_response
 async def ws_facets(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
-    """Return what the filters can offer: the automations and scripts that sent notifications, by current name."""
+    """Return what the filters can offer: the origins that sent notifications, by current name.
+
+    Origins without a name of their own (a user by hand, Home Assistant, unknown) come without one;
+    the panel names them.
+    """
     if (scope := _store_and_scope(hass, connection, msg)) is None:
         return
     store, user_id = scope
@@ -168,6 +176,54 @@ async def ws_facets(hass: HomeAssistant, connection: websocket_api.ActiveConnect
     origins = [{"id": o["id"], "name": names.name(o["id"], o["name"])} for o in facets["origins"]]
     origins.sort(key=lambda o: (o["name"] or o["id"] or "").casefold())
     connection.send_result(msg["id"], {"origins": origins})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/statistics",
+        vol.Required("period"): vol.In(PERIOD_KINDS),
+        vol.Optional("offset", default=0): vol.All(int, vol.Range(min=0, max=1000)),
+        vol.Optional("first_weekday", default=0): vol.All(int, vol.Range(min=0, max=6)),
+        vol.Optional("time_zone"): str,
+        vol.Optional("user_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_statistics(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Return the statistics of a day, week, month or year, offset periods back, in the caller's time zone.
+
+    A week starts on first_weekday (Monday 0 to Sunday 6). Origins carry their current name, else the one stored with
+    their newest notification; origins without a name of their own come without one.
+    """
+    if (scope := _store_and_scope(hass, connection, msg)) is None:
+        return
+    store, user_id = scope
+    zone = await _time_zone(msg.get("time_zone"))
+    current = period(msg["period"], msg["offset"], msg["first_weekday"], dt_util.now(zone))
+    counted = await store.async_statistics(
+        user_id,
+        (current.start.timestamp(), current.end.timestamp()),
+        (current.compare_start.timestamp(), current.compare_end.timestamp()),
+    )
+    result = await hass.async_add_executor_job(summarize, counted.rows, counted.previous, current, zone)
+    names = OriginNames(hass)
+    for origin in result["origins"]:
+        origin["name"] = names.name(origin["key"], counted.names.get(origin["key"]))
+    connection.send_result(
+        msg["id"],
+        {
+            "period": current.kind,
+            "start": current.start.isoformat(),
+            "end": current.end.isoformat(),
+            "has_older": counted.oldest is not None and counted.oldest < current.start.timestamp(),
+            "comparable": counted.counting_since is not None
+            and counted.counting_since <= current.compare_start.timestamp(),
+            "kept_since": None
+            if counted.kept_since is None
+            else dt_util.utc_from_timestamp(counted.kept_since).isoformat(),
+            **result,
+        },
+    )
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/subscribe"})
@@ -193,6 +249,17 @@ async def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConn
 
     connection.subscriptions[msg["id"]] = async_dispatcher_connect(hass, SIGNAL_CHANGED, _forward)
     connection.send_result(msg["id"])
+
+
+async def _time_zone(name: str | None) -> tzinfo:
+    """Return the time zone the caller sees, loaded without blocking; Home Assistant's own if none or unknown."""
+    if name:
+        try:
+            if (zone := await dt_util.async_get_time_zone(name)) is not None:
+                return zone
+        except ValueError:
+            pass
+    return dt_util.get_default_time_zone()
 
 
 def _non_admins_see_nothing(hass: HomeAssistant) -> bool:

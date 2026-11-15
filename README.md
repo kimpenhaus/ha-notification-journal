@@ -17,6 +17,7 @@ Home Assistant forgets a notification the moment it is sent. Notification Journa
 - **Shows who it reached**: notify groups are resolved into the people and devices behind them; a person's current name and picture are shown, and automations, scripts and integrations appear under their current name.
 - **Shows where it came from**: the automation or script that sent it, with a link to the exact trace of that run, the user who sent it by hand, or the custom integration that sent it from its own code.
 - **Two views**: a timeline by day, or grouped by automation; both sorted newest or oldest first, every day and group can be folded.
+- **Statistics**: who notifies how much and when, by day, week, month or year: totals compared with the period before, the share of answered notifications with buttons, notifications at night and bursts (quarter hours with five or more from one origin), a history by origin, a heatmap of weekday and hour, and a ranking of origins. A bar or an origin opens its notifications. The statistics outlast the retention of the notifications.
 - **Search and filters**: full-text search over title, message, recipients and origin; filters for status, origin and period.
 - **Archive**: select notifications and move them out of your view, as in Home Assistant's own lists; the archive is per person, others keep seeing them.
 - **Private by person**: administrators see everything; everybody else sees the notifications sent to them, the bell and spoken announcements. Telegram chats belong to no Home Assistant user, so only administrators see those.
@@ -45,6 +46,7 @@ The panel *Notification Journal* appears in the sidebar. Only notifications sent
 | | Do not record: channels whose notifications are skipped, from any source (a notify action or entity, a media player, a voice satellite) | none |
 | Retention | Keep for | 90 days |
 | | At most | 100,000 entries |
+| | Keep statistics for: whole calendar years, at least two, never shorter than the notifications | 2 years |
 | Access | Users without administrator rights see: their own notifications and the bell, or nothing (the panel is then for administrators only) | their own |
 | Sidebar | Show in the sidebar (hidden, the panel stays reachable under `/notification-journal`) | on |
 | | Title, icon | *Notification Journal*, the bell on the stack |
@@ -65,9 +67,9 @@ Every card shows a status:
 
 ## Privacy
 
-Everything stays in your Home Assistant. The journal is an SQLite database, `notification_journal.db`, next to `configuration.yaml`, separate from the recorder. It holds per notification: title, message, the data sent with it (actions, references to images and links, tags), the recipients, the automation, script, user or integration that sent it, the answers to its buttons, and the time. Images and attachments themselves are not copied, only their references.
+Everything stays in your Home Assistant. The journal is an SQLite database, `notification_journal.db`, next to `configuration.yaml`, separate from the recorder. It holds per notification: title, message, the data sent with it (actions, references to images and links, tags), the recipients, the automation, script, user or integration that sent it, the answers to its buttons, and the time. Images and attachments themselves are not copied, only their references. For the statistics it also counts per hour how many notifications each origin sent to whom, without any text.
 
-Old entries are deleted once a day (*Retention*). The database is part of every Home Assistant backup; recording pauses while a backup is taken. Removing the integration keeps the database file; delete it by hand if you want the journal gone.
+Old entries are deleted once a day (*Retention*); the hourly counts stay as long as *Keep statistics for* says, also after the notifications are deleted. The database is part of every Home Assistant backup; recording pauses while a backup is taken. Removing the integration keeps the database file; delete it by hand if you want the journal gone.
 
 ## What it does not record
 
@@ -83,6 +85,7 @@ Old entries are deleted once a day (*Retention*). The database is part of every 
 |-------|------|
 | <img src="docs/screenshots/timeline-light.png" alt="Timeline, light" width="360"> | <img src="docs/screenshots/timeline-dark.png" alt="Timeline, dark" width="360"> |
 | <img src="docs/screenshots/automations-light.png" alt="Grouped by automation, light" width="360"> | <img src="docs/screenshots/automations-dark.png" alt="Grouped by automation, dark" width="360"> |
+| <img src="docs/screenshots/statistics-light.png" alt="Statistics, light" width="360"> | <img src="docs/screenshots/statistics-dark.png" alt="Statistics, dark" width="360"> |
 | <img src="docs/screenshots/mobile-light.png" alt="Phone, light" width="200"> | <img src="docs/screenshots/mobile-dark.png" alt="Phone, dark" width="200"> |
 
 The screenshots show made-up data in Home Assistant's default theme.

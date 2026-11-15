@@ -1,13 +1,15 @@
 import { css, html, LitElement, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 
-import { type Clock, dayKey, dayLabel } from "./format";
+import { type Clock, dayKey, dayLabel, formatter } from "./format";
 import {
   icon,
   mdiArchiveArrowDownOutline,
   mdiArchiveArrowUpOutline,
   mdiArchiveOutline,
+  mdiArrowLeft,
   mdiCalendarClockOutline,
+  mdiChartBar,
   mdiCheckboxMultipleMarkedOutline,
   mdiChevronDown,
   mdiClose,
@@ -26,7 +28,10 @@ import {
   mdiUnfoldMoreHorizontal,
 } from "./icons";
 import { countText, type Localize, localizer } from "./localize";
-import { originGlyph } from "./record";
+import { originGlyph, originName } from "./record";
+import type { NotificationJournalStatistics } from "./statistics";
+import "./statistics";
+import { controlStyles } from "./styles";
 import type {
   Facets,
   Filters,
@@ -36,9 +41,11 @@ import type {
   PanelInfo,
   Period,
   RecordEvent,
+  StatisticsSelection,
   Status,
   View,
 } from "./types";
+import { errorMessage, store, stored } from "./util";
 
 const PAGE_SIZE = 50;
 const ARCHIVE_BATCH = 200;
@@ -57,23 +64,7 @@ const ORDER_KEY = "notification_journal.newest_first";
 
 type Item = { day: string } | { group: string; record: NotificationRecord } | { record: NotificationRecord };
 
-function stored(key: string): string | null {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function store(key: string, value: string): void {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // Without storage the choice lasts until the page reloads.
-  }
-}
-
-/** The key of an origin's group, the same as `ORIGIN_GROUP` in the store. */
+/** The key of an origin's group, the same as `origin_key` in the store. */
 function groupKey(record: NotificationRecord): string {
   const origin = record.origin;
   return origin.entity_id ?? (origin.integration ? `integration.${origin.integration}` : origin.kind);
@@ -97,11 +88,6 @@ function errorCode(error: unknown): string | undefined {
   return typeof error === "object" && error && "code" in error ? String(error.code) : undefined;
 }
 
-function errorMessage(error: unknown): string {
-  if (typeof error === "object" && error && "message" in error) return String(error.message);
-  return String(error);
-}
-
 export class NotificationJournalPanel extends LitElement {
   static override properties = {
     narrow: { type: Boolean },
@@ -121,6 +107,7 @@ export class NotificationJournalPanel extends LitElement {
     _archived: { state: true },
     _selecting: { state: true },
     _selected: { state: true },
+    _screen: { state: true },
   };
 
   declare narrow: boolean;
@@ -140,12 +127,17 @@ export class NotificationJournalPanel extends LitElement {
   declare _archived: boolean;
   declare _selecting: boolean;
   declare _selected: Set<string>;
+  declare _screen: "list" | "statistics";
 
   private _hass?: HomeAssistant;
   private _request = 0;
   private _unsubscribe?: Promise<() => Promise<void>>;
   private _searchTimer?: number;
   private _facetsTimer?: number;
+  private _statisticsTimer?: number;
+  /** Names of origins the statistics opened, which the filter may not offer once their notifications are gone. */
+  private _originNames = new Map<string, string>();
+  private _keptSince: string | null = null;
   private _observer?: IntersectionObserver;
   private _localizer?: { language: string; localize: Localize };
   private _clockCache?: Clock;
@@ -166,6 +158,7 @@ export class NotificationJournalPanel extends LitElement {
     this._archived = false;
     this._selecting = false;
     this._selected = new Set();
+    this._screen = "list";
     this._search = "";
     this._loading = false;
     this._pending = 0;
@@ -238,6 +231,7 @@ export class NotificationJournalPanel extends LitElement {
     this._observer = undefined;
     window.clearTimeout(this._searchTimer);
     window.clearTimeout(this._facetsTimer);
+    window.clearTimeout(this._statisticsTimer);
   }
 
   private _query(): Record<string, unknown> {
@@ -248,7 +242,12 @@ export class NotificationJournalPanel extends LitElement {
     if (filters.origin) query.origin = filters.origin;
     if (this._archived) query.archived = true;
     if (this._view === "origin") query.group_by = "origin";
-    if (filters.period) query.since = new Date(Date.now() - PERIODS[filters.period] * 86_400_000).toISOString();
+    if (typeof filters.period === "object") {
+      query.since = filters.period.since;
+      query.until = filters.period.until;
+    } else if (filters.period) {
+      query.since = new Date(Date.now() - PERIODS[filters.period] * 86_400_000).toISOString();
+    }
     return query;
   }
 
@@ -311,6 +310,10 @@ export class NotificationJournalPanel extends LitElement {
       return;
     }
     const { change, record } = event;
+    if (this._screen === "statistics") {
+      window.clearTimeout(this._statisticsTimer);
+      this._statisticsTimer = window.setTimeout(() => void this._statistics?.refresh(), 2000);
+    }
     const index = this._records.findIndex((known) => known.id === record.id);
     if (index >= 0) {
       this._records = this._records.map((known, position) => (position === index ? record : known));
@@ -327,6 +330,27 @@ export class NotificationJournalPanel extends LitElement {
       window.clearTimeout(this._facetsTimer);
       this._facetsTimer = window.setTimeout(() => void this._loadFacets(), 2000);
     }
+  }
+
+  private get _statistics(): NotificationJournalStatistics | null {
+    return this.renderRoot.querySelector("notification-journal-statistics");
+  }
+
+  private _showStatistics(show: boolean): void {
+    this._screen = show ? "statistics" : "list";
+    this._endSelection();
+    this.renderRoot.querySelector(".content")?.scrollTo({ top: 0 });
+  }
+
+  /** Open the list on what a bar or an origin of the statistics stands for. */
+  private _openSelection({ range, origin, keptSince }: StatisticsSelection): void {
+    if (origin) this._originNames.set(origin.key, origin.name);
+    this._keptSince = keptSince;
+    this._screen = "list";
+    this._archived = false;
+    this._search = "";
+    window.clearTimeout(this._searchTimer);
+    this._set({ text: "", status: "", origin: origin?.key ?? "", period: range });
   }
 
   private _removed(recordId: string): void {
@@ -545,6 +569,30 @@ export class NotificationJournalPanel extends LitElement {
         </div>
       `;
     }
+    if (this._screen === "statistics") {
+      return html`
+        <div class="toolbar">
+          <button class="icon-button" title=${localize("back")} @click=${() => this._showStatistics(false)}>
+            ${icon(mdiArrowLeft, localize("back"))}
+          </button>
+          <h1>${localize("statistics")}</h1>
+          <button class="icon-button" title=${localize("refresh")} @click=${() => void this._statistics?.refresh()}>
+            ${icon(mdiRefresh, localize("refresh"))}
+          </button>
+        </div>
+        <div class="content">
+          <div class="wrapper">
+            <notification-journal-statistics
+              .hass=${this._hass}
+              .localize=${localize}
+              .clock=${this._clock}
+              .originIcons=${this._lookups().originIcons}
+              @statistics-select=${(event: CustomEvent<StatisticsSelection>) => this._openSelection(event.detail)}
+            ></notification-journal-statistics>
+          </div>
+        </div>
+      `;
+    }
     return html`
       <div class="toolbar">
         ${
@@ -559,6 +607,9 @@ export class NotificationJournalPanel extends LitElement {
             : nothing
         }
         <h1>${this.panel?.title || localize("title")}</h1>
+        <button class="icon-button" title=${localize("statistics")} @click=${() => this._showStatistics(true)}>
+          ${icon(mdiChartBar, localize("statistics"))}
+        </button>
         <button class="icon-button" title=${localize("refresh")} @click=${() => this._refresh()}>
           ${icon(mdiRefresh, localize("refresh"))}
         </button>
@@ -634,16 +685,30 @@ export class NotificationJournalPanel extends LitElement {
             "origin",
             localize("origin_all"),
             html`<option value="" ?selected=${!filters.origin}>${localize("origin_all")}</option>
+              ${
+                filters.origin && !facets.origins.some((option) => option.id === filters.origin)
+                  ? html`<option value=${filters.origin} selected>
+                      ${this._originNames.get(filters.origin) ?? filters.origin}
+                    </option>`
+                  : nothing
+              }
               ${facets.origins.map(
                 (option) =>
-                  html`<option value=${option.id} ?selected=${filters.origin === option.id}>${option.name}</option>`,
+                  html`<option value=${option.id} ?selected=${filters.origin === option.id}>
+                    ${originName(localize, option.id, option.name)}
+                  </option>`,
               )}`,
           )}
           ${select(
-            filters.period,
+            typeof filters.period === "object" ? "range" : filters.period,
             "period",
             localize("period_all"),
             html`<option value="" ?selected=${!filters.period}>${localize("period_all")}</option>
+              ${
+                typeof filters.period === "object"
+                  ? html`<option value="range" selected>${filters.period.label}</option>`
+                  : nothing
+              }
               ${(Object.keys(PERIODS) as Exclude<Period, "">[]).map(
                 (period) =>
                   html`<option value=${period} ?selected=${filters.period === period}>
@@ -696,8 +761,19 @@ export class NotificationJournalPanel extends LitElement {
                 </button>`
           }
         </div>
+        ${this._keptNotice(localize)}
       </div>
     `;
+  }
+
+  /** Say so when the list opened from the statistics reaches back further than single notifications are kept. */
+  private _keptNotice(localize: Localize): TemplateResult | typeof nothing {
+    const period = this._filters.period;
+    const kept = this._keptSince;
+    if (typeof period !== "object" || !kept || Date.parse(kept) <= Date.parse(period.since)) return nothing;
+    const clock = this._clock;
+    const date = formatter(clock.language, { dateStyle: "medium", timeZone: clock.timeZone }).format(new Date(kept));
+    return html`<p class="kept">${localize("kept_since", { date })}</p>`;
   }
 
   private _foldAll(localize: Localize): TemplateResult | typeof nothing {
@@ -802,17 +878,7 @@ export class NotificationJournalPanel extends LitElement {
     originIcons: Map<string, string>,
   ): TemplateResult {
     const origin = record.origin;
-    let name: string;
-    if (origin.kind === "automation" || origin.kind === "script") {
-      const state = origin.entity_id ? this._hass?.states[origin.entity_id] : undefined;
-      name = String(
-        state?.attributes.friendly_name ?? origin.name ?? origin.entity_id ?? localize(`origin_${origin.kind}`),
-      );
-    } else if (origin.kind === "integration") {
-      name = origin.name ?? origin.integration ?? localize("origin_integration");
-    } else {
-      name = localize(origin.kind === "user" ? "origin_by_hand" : `origin_${origin.kind}`);
-    }
+    const name = originName(localize, key, origin.name);
     const glyph = originGlyph(origin, originIcons);
     const section = `group-${key}`;
     const collapsed = this._collapsed.has(section);
@@ -829,6 +895,7 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   static override styles = css`
+    ${controlStyles}
     :host {
       display: flex;
       flex-direction: column;
@@ -858,36 +925,6 @@ export class NotificationJournalPanel extends LitElement {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-    }
-    .icon {
-      width: 24px;
-      height: 24px;
-      fill: currentColor;
-      flex: none;
-    }
-    .icon-button {
-      display: grid;
-      place-items: center;
-      width: 44px;
-      height: 44px;
-      padding: 0;
-      border: none;
-      border-radius: 50%;
-      background: none;
-      color: inherit;
-      cursor: pointer;
-    }
-    .icon-button:hover {
-      background: color-mix(in srgb, currentColor 10%, transparent);
-    }
-    .icon-button.small {
-      width: 32px;
-      height: 32px;
-      color: var(--secondary-text-color);
-    }
-    .icon-button.small .icon {
-      width: 18px;
-      height: 18px;
     }
     .content {
       flex: 1;
@@ -995,11 +1032,6 @@ export class NotificationJournalPanel extends LitElement {
       height: 18px;
       color: var(--secondary-text-color);
     }
-    select:focus-visible,
-    button:focus-visible {
-      outline: 2px solid var(--primary-color);
-      outline-offset: 2px;
-    }
     .summary {
       display: flex;
       align-items: center;
@@ -1032,10 +1064,6 @@ export class NotificationJournalPanel extends LitElement {
     .text-button[disabled] {
       color: var(--disabled-text-color);
       cursor: default;
-    }
-    .list.busy {
-      opacity: 0.6;
-      transition: opacity 0.2s 0.15s;
     }
     .list {
       display: flex;
@@ -1101,6 +1129,11 @@ export class NotificationJournalPanel extends LitElement {
       margin-left: 12px;
       color: var(--error-color);
     }
+    .kept {
+      margin: 0;
+      color: var(--secondary-text-color);
+      font-size: 0.875rem;
+    }
     .group-icon {
       display: grid;
       place-items: center;
@@ -1134,32 +1167,6 @@ export class NotificationJournalPanel extends LitElement {
       text-align: center;
       color: var(--secondary-text-color);
       background: var(--secondary-background-color);
-    }
-    .view {
-      display: inline-flex;
-      height: 34px;
-      padding: 2px;
-      box-sizing: border-box;
-      border-radius: 17px;
-      border: 1px solid var(--divider-color);
-      background: var(--card-background-color);
-    }
-    .view button {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 0 12px;
-      border: none;
-      border-radius: 15px;
-      background: none;
-      color: var(--secondary-text-color);
-      font: inherit;
-      font-size: 0.875rem;
-      cursor: pointer;
-    }
-    .view button .icon {
-      width: 18px;
-      height: 18px;
     }
     .options {
       display: flex;
@@ -1200,10 +1207,6 @@ export class NotificationJournalPanel extends LitElement {
       opacity: 0.5;
       cursor: default;
     }
-    .view button.selected {
-      color: var(--text-primary-color);
-      background: var(--primary-color);
-    }
     .pending {
       position: sticky;
       top: 8px;
@@ -1218,35 +1221,13 @@ export class NotificationJournalPanel extends LitElement {
       font: inherit;
       font-size: 0.875rem;
       font-weight: 500;
-      box-shadow: 0 2px 6px var(--shadow-color);
+      box-shadow: var(--ha-card-box-shadow, none);
       cursor: pointer;
     }
     .sentinel {
       display: flex;
       justify-content: center;
       padding: 16px 0;
-    }
-    .empty {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 64px 16px;
-      text-align: center;
-      color: var(--secondary-text-color);
-    }
-    .empty .icon {
-      width: 56px;
-      height: 56px;
-      opacity: 0.5;
-    }
-    .empty h2 {
-      margin: 16px 0 4px;
-      font-size: 1.1rem;
-      font-weight: 500;
-      color: var(--primary-text-color);
-    }
-    .empty p {
-      margin: 8px 0;
     }
     .visually-hidden {
       position: absolute;

@@ -19,6 +19,7 @@ PANEL_TITLES: Final = {"de": "Benachrichtigungsverlauf"}
 
 CONF_RETENTION_DAYS: Final = "retention_days"
 CONF_MAX_ENTRIES: Final = "max_entries"
+CONF_STATISTICS_YEARS: Final = "statistics_years"
 CONF_RECORD_NOTIFY: Final = "record_notify"
 CONF_EXCLUDED_CHANNELS: Final = "excluded_channels"
 CONF_NON_ADMIN_VISIBILITY: Final = "non_admin_visibility"
@@ -41,10 +42,13 @@ MIN_RETENTION_DAYS: Final = 1
 MAX_RETENTION_DAYS: Final = 3650
 MIN_MAX_ENTRIES: Final = 100
 MAX_MAX_ENTRIES: Final = 1_000_000
+MIN_STATISTICS_YEARS: Final = 2
+MAX_STATISTICS_YEARS: Final = 10
 
 DEFAULT_OPTIONS: Final = {
     CONF_RETENTION_DAYS: 90,
     CONF_MAX_ENTRIES: 100_000,
+    CONF_STATISTICS_YEARS: MIN_STATISTICS_YEARS,
     CONF_RECORD_NOTIFY: True,
     CONF_RECORD_PERSISTENT: True,
     CONF_RECORD_SPEECH: True,

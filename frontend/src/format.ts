@@ -7,7 +7,7 @@ export interface Clock {
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
-function formatter(language: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+export function formatter(language: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
   const key = `${language}|${JSON.stringify(options)}`;
   let cached = formatters.get(key);
   if (!cached) {
@@ -15,6 +15,22 @@ function formatter(language: string, options: Intl.DateTimeFormatOptions): Intl.
     formatters.set(key, cached);
   }
   return cached;
+}
+
+const numberFormatters = new Map<string, Intl.NumberFormat>();
+
+export function numberFormatter(language: string): Intl.NumberFormat {
+  let cached = numberFormatters.get(language);
+  if (!cached) {
+    cached = new Intl.NumberFormat(language);
+    numberFormatters.set(language, cached);
+  }
+  return cached;
+}
+
+/** A share in whole percent, or a dash without a total. */
+export function percentText(language: string, part: number, total: number): string {
+  return total ? `${numberFormatter(language).format(Math.round((100 * part) / total))} %` : "–";
 }
 
 function parts(clock: Clock, date: Date): string {

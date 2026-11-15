@@ -29,6 +29,7 @@ import {
 } from "./icons";
 import { countText, type Localize } from "./localize";
 import { followInternal, inline } from "./markdown";
+import { surface } from "./styles";
 import type { Answer, NotificationRecord, Origin, OriginKind, Recipient, Status } from "./types";
 
 const BELL = "persistent_notification";
@@ -51,6 +52,32 @@ const ORIGIN_ICONS: Record<OriginKind, string> = {
 };
 
 /** The icon of an origin: the automation's or script's own icon if it has one, else the one of its kind. */
+/** The origin a key (`origin_key` in the store) stands for, as far as the key tells. */
+export function originOfKey(key: string): Origin {
+  const domain = key.slice(0, key.indexOf("."));
+  const kind = (
+    domain === "automation" || domain === "script" || domain === "integration" ? domain : key
+  ) as OriginKind;
+  return {
+    kind,
+    entity_id: kind === "automation" || kind === "script" ? key : null,
+    name: null,
+    trace_key: null,
+    run_id: null,
+    user_id: null,
+    integration: kind === "integration" ? key.slice(domain.length + 1) : null,
+  };
+}
+
+/** The name of an origin by its key; Home Assistant, a user by hand and an unknown origin have none of their own. */
+export function originName(localize: Localize, key: string, name: string | null): string {
+  if (name) return name;
+  if (key === "user") return localize("origin_by_hand");
+  if (key === "system") return localize("origin_system");
+  if (key === "unknown") return localize("origin_unknown");
+  return key;
+}
+
 export function originGlyph(origin: Origin, originIcons: Map<string, string>): TemplateResult {
   const own = origin.entity_id ? originIcons.get(origin.entity_id) : undefined;
   return own && customElements.get("ha-icon")
@@ -426,10 +453,7 @@ export class NotificationJournalRecord extends LitElement {
       display: flex;
       gap: 14px;
       padding: 14px 16px 6px;
-      background: var(--card-background-color);
-      border-radius: var(--ha-card-border-radius, 12px);
-      border: var(--ha-card-border-width, 1px) solid var(--ha-card-border-color, var(--divider-color));
-      box-shadow: var(--ha-card-box-shadow, none);
+      ${surface}
       border-left: 4px solid var(--status-color);
     }
     .card.delivered,
