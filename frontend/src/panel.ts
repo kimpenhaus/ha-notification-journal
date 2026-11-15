@@ -29,7 +29,7 @@ import {
 } from "./icons";
 import { countText, type Localize, localizer } from "./localize";
 import { originGlyph } from "./record";
-import { type NotificationJournalStatistics, statisticsStyles } from "./statistics";
+import { type NotificationJournalStatistics, originName, statisticsStyles } from "./statistics";
 import type {
   Facets,
   Filters,
@@ -77,7 +77,7 @@ function store(key: string, value: string): void {
   }
 }
 
-/** The key of an origin's group, the same as `ORIGIN_GROUP` in the store. */
+/** The key of an origin's group, the same as `origin_key` in the store. */
 function groupKey(record: NotificationRecord): string {
   const origin = record.origin;
   return origin.entity_id ?? (origin.integration ? `integration.${origin.integration}` : origin.kind);
@@ -325,6 +325,10 @@ export class NotificationJournalPanel extends LitElement {
       return;
     }
     const { change, record } = event;
+    if (this._screen === "statistics") {
+      window.clearTimeout(this._statisticsTimer);
+      this._statisticsTimer = window.setTimeout(() => void this._statistics?.refresh(), 2000);
+    }
     const index = this._records.findIndex((known) => known.id === record.id);
     if (index >= 0) {
       this._records = this._records.map((known, position) => (position === index ? record : known));
@@ -340,10 +344,6 @@ export class NotificationJournalPanel extends LitElement {
       }
       window.clearTimeout(this._facetsTimer);
       this._facetsTimer = window.setTimeout(() => void this._loadFacets(), 2000);
-      if (this._screen === "statistics") {
-        window.clearTimeout(this._statisticsTimer);
-        this._statisticsTimer = window.setTimeout(() => void this._statistics?.refresh(), 2000);
-      }
     }
   }
 
@@ -364,16 +364,14 @@ export class NotificationJournalPanel extends LitElement {
     this._archived = false;
     this._search = "";
     window.clearTimeout(this._searchTimer);
-    this._set({ text: "", status: "", origin: origin ?? "", period: "range", range });
-  }
-
-  /** The name of an origin in the filter; Home Assistant, a user by hand and an unknown origin have none of their own. */
-  private _originName(localize: Localize, id: string, name: string | null): string {
-    if (name) return name;
-    if (id === "user") return localize("origin_by_hand");
-    if (id === "system") return localize("origin_system");
-    if (id === "unknown") return localize("origin_unknown");
-    return id;
+    this._set({
+      text: "",
+      status: "",
+      origin: origin?.key ?? "",
+      originName: origin?.name,
+      period: "range",
+      range,
+    });
   }
 
   private _removed(recordId: string): void {
@@ -708,10 +706,15 @@ export class NotificationJournalPanel extends LitElement {
             "origin",
             localize("origin_all"),
             html`<option value="" ?selected=${!filters.origin}>${localize("origin_all")}</option>
+              ${
+                filters.origin && !facets.origins.some((option) => option.id === filters.origin)
+                  ? html`<option value=${filters.origin} selected>${filters.originName ?? filters.origin}</option>`
+                  : nothing
+              }
               ${facets.origins.map(
                 (option) =>
                   html`<option value=${option.id} ?selected=${filters.origin === option.id}>
-                    ${this._originName(localize, option.id, option.name)}
+                    ${originName(localize, option.id, option.name)}
                   </option>`,
               )}`,
           )}
@@ -1317,7 +1320,7 @@ export class NotificationJournalPanel extends LitElement {
         font: inherit;
         font-size: 0.875rem;
         font-weight: 500;
-        box-shadow: 0 2px 6px var(--shadow-color);
+        box-shadow: var(--ha-card-box-shadow, none);
         cursor: pointer;
       }
       .sentinel {

@@ -64,6 +64,15 @@ function originOf(key: string): Origin {
   };
 }
 
+/** The name of an origin by its key; Home Assistant, a user by hand and an unknown origin have none of their own. */
+export function originName(localize: Localize, key: string, name: string | null): string {
+  if (name) return name;
+  if (key === "user") return localize("origin_by_hand");
+  if (key === "system") return localize("origin_system");
+  if (key === "unknown") return localize("origin_unknown");
+  return key;
+}
+
 function colour(slot: number): string {
   return slot ? `var(--graph-color-${slot}, var(--color-${slot}))` : "var(--disabled-text-color)";
 }
@@ -112,6 +121,7 @@ export class NotificationJournalStatistics extends LitElement {
 
   private _request = 0;
   private _resize?: ResizeObserver;
+  private _observed?: Element;
 
   constructor() {
     super();
@@ -141,18 +151,20 @@ export class NotificationJournalStatistics extends LitElement {
     super.disconnectedCallback();
     this._resize?.disconnect();
     this._resize = undefined;
+    this._observed = undefined;
   }
 
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
-    const chart = this.querySelector<HTMLElement>(".chart");
-    if (chart && !this._resize) {
-      this._resize = new ResizeObserver(([entry]) => {
-        const width = Math.round(entry.contentRect.width);
-        if (width !== this._width) this._width = width;
-      });
-      this._resize.observe(chart);
-    }
+    const chart = this.querySelector(".chart");
+    if (!chart || chart === this._observed) return;
+    this._resize ??= new ResizeObserver(([entry]) => {
+      const width = Math.round(entry.contentRect.width);
+      if (width !== this._width) this._width = width;
+    });
+    this._resize.disconnect();
+    this._resize.observe(chart);
+    this._observed = chart;
   }
 
   /** Load the statistics of the shown period again. */
@@ -244,13 +256,7 @@ export class NotificationJournalStatistics extends LitElement {
   }
 
   private _name(origin: OriginStatistics | undefined, key: string): string {
-    if (key === OTHER) return this.localize("other_origins");
-    if (origin?.name) return origin.name;
-    const kind = originOf(key).kind;
-    if (kind === "user") return this.localize("origin_by_hand");
-    if (kind === "system") return this.localize("origin_system");
-    if (kind === "unknown") return this.localize("origin_unknown");
-    return key;
+    return key === OTHER ? this.localize("other_origins") : originName(this.localize, key, origin?.name ?? null);
   }
 
   override render(): TemplateResult {
@@ -334,6 +340,7 @@ export class NotificationJournalStatistics extends LitElement {
   }
 
   private _change(current: number, previous: number): string {
+    if (!this._data?.comparable) return "–";
     if (!previous) return current ? this.localize("trend_new") : "±0";
     const change = Math.round((100 * (current - previous)) / previous);
     if (change === 0) return "±0 %";
@@ -361,7 +368,11 @@ export class NotificationJournalStatistics extends LitElement {
       ${tile(
         localize("tile_notifications"),
         number.format(totals.notifications),
-        localize(`compare_${data.period}`, { change: this._change(totals.notifications, data.previous.notifications) }),
+        data.comparable
+          ? localize(`compare_${data.period}`, {
+              change: this._change(totals.notifications, data.previous.notifications),
+            })
+          : localize("no_comparison"),
       )}
       ${tile(
         localize("tile_answered"),
@@ -562,7 +573,8 @@ export class NotificationJournalStatistics extends LitElement {
         <tbody>
           ${origins.map((origin) => {
             const name = this._name(origin, origin.key);
-            const select = () => this._select({ origin: origin.key, since: data.start, until: data.end, label });
+            const select = () =>
+              this._select({ origin: { key: origin.key, name }, since: data.start, until: data.end, label });
             return html`<tr
               tabindex="0"
               @click=${select}
@@ -769,7 +781,7 @@ export const statisticsStyles = css`
     border-radius: 8px;
     border: 1px solid var(--divider-color);
     background: var(--card-background-color);
-    box-shadow: 0 4px 14px var(--shadow-color);
+    box-shadow: var(--ha-card-box-shadow, none);
     font-size: 0.8rem;
     pointer-events: none;
   }

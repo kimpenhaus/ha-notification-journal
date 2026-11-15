@@ -1,16 +1,17 @@
-"""Hourly counts of the notifications sent, and the statistics the panel shows from them.
+"""Counts of the notifications sent per quarter hour, and the statistics the panel shows from them.
 
 The counts outlive the notifications themselves: purging, archiving or deleting a notification leaves them
-unchanged. One row holds an hour, an origin and whose view it counts for: ALL for administrators, EVERYONE for
-the bell and announcements, else a user. A user's view adds their rows to those of EVERYONE, so a notification
-that also reached everyone counts only under EVERYONE.
+unchanged. One row holds a quarter hour, an origin and whose view it counts for: ALL for administrators, EVERYONE
+for the bell and announcements, else a user. A user's view adds their rows to those of EVERYONE, so a notification
+that also reached everyone counts only under EVERYONE. Quarter hours, because every time zone is a whole number of
+them away from UTC: each slot lies within one local hour, day, month and year.
 """
 
 from __future__ import annotations
 
 import calendar
 from collections import defaultdict, deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, tzinfo
 from typing import Any, Literal
@@ -23,12 +24,12 @@ ALL = ""
 
 BURST_SIZE = 5
 BURST_WINDOW = 600
-"""A burst starts with the BURST_SIZE-th notification of one origin within BURST_WINDOW seconds."""
+"""In each view, a burst starts with the BURST_SIZE-th notification of one origin within BURST_WINDOW seconds."""
 
 NIGHT_FROM = 22
 NIGHT_UNTIL = 7
 HOUR = 3600
-
+SLOT = 900
 
 PeriodKind = Literal["day", "week", "month", "year"]
 PERIOD_KINDS: tuple[PeriodKind, ...] = ("day", "week", "month", "year")
@@ -36,21 +37,21 @@ PERIOD_KINDS: tuple[PeriodKind, ...] = ("day", "week", "month", "year")
 COUNTS_SCHEMA = (
     """CREATE TABLE IF NOT EXISTS notification_counts (
         user_id TEXT NOT NULL,
-        hour INTEGER NOT NULL,
+        slot INTEGER NOT NULL,
         origin TEXT NOT NULL,
         notifications INTEGER NOT NULL DEFAULT 0,
         with_buttons INTEGER NOT NULL DEFAULT 0,
         answered INTEGER NOT NULL DEFAULT 0,
         bursts INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (user_id, hour, origin)
+        PRIMARY KEY (user_id, slot, origin)
     ) WITHOUT ROWID""",
-    "CREATE INDEX IF NOT EXISTS notification_counts_hour ON notification_counts (hour)",
+    "CREATE INDEX IF NOT EXISTS notification_counts_slot ON notification_counts (slot)",
 )
 
 UPSERT_COUNTS = """
-INSERT INTO notification_counts (user_id, hour, origin, notifications, with_buttons, answered, bursts)
+INSERT INTO notification_counts (user_id, slot, origin, notifications, with_buttons, answered, bursts)
 VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (user_id, hour, origin) DO UPDATE SET
+ON CONFLICT (user_id, slot, origin) DO UPDATE SET
     notifications = notifications + excluded.notifications,
     with_buttons = with_buttons + excluded.with_buttons,
     answered = answered + excluded.answered,
@@ -62,14 +63,13 @@ Counts = tuple[int, int, int, int]
 
 
 def group_key(origin: Origin) -> str:
-    """Return the key an origin is counted and grouped under, the same as `ORIGIN_GROUP` in the store."""
+    """Return the key an origin is counted and grouped under (`origin_key` in the database)."""
     return origin_key(origin) or origin.kind.value
 
 
-def hour_of(time: datetime) -> int:
-    """Return the start of the UTC hour a moment falls in, in seconds since the epoch."""
-    stamp = int(time.timestamp())
-    return stamp - stamp % HOUR
+def slot_of(stamp: float) -> int:
+    """Return the start of the quarter hour a moment in seconds since the epoch falls in."""
+    return int(stamp) - int(stamp) % SLOT
 
 
 def has_buttons(data: dict[str, Any] | None) -> bool:
@@ -84,13 +84,18 @@ def view_keys(users: Iterable[str]) -> set[str]:
     return {EVERYONE} if EVERYONE in users else users
 
 
-def contributions(users: Iterable[str], buttons: bool, answers: list[Answer], burst: bool) -> dict[str, Counts]:
-    """Return what one notification adds to the rows of each view."""
-    result: dict[str, Counts] = {ALL: (1, int(buttons), int(bool(answers)), int(burst))}
+def contributions(bursts: Mapping[str, bool], buttons: bool, answers: list[Answer]) -> dict[str, Counts]:
+    """Return what one notification adds to the rows of each view it counts for.
+
+    bursts has the views (ALL and those of `view_keys`) and whether the notification starts a burst in each. A
+    user's row counts only that user's answer, the same as the panel shows; EVERYONE's row counts none, as nobody
+    may see another user's answer.
+    """
     answered_by = {answer.user_id for answer in answers}
-    for user in view_keys(users):
-        answered = bool(answers) if user == EVERYONE else user in answered_by
-        result[user] = (1, int(buttons), int(answered), int(burst))
+    result: dict[str, Counts] = {}
+    for view, burst in bursts.items():
+        answered = bool(answers) if view == ALL else view in answered_by
+        result[view] = (1, int(buttons), int(answered), int(burst))
     return result
 
 
@@ -105,21 +110,21 @@ def difference(before: dict[str, Counts], after: dict[str, Counts]) -> dict[str,
     return result
 
 
-def counts_of(record: NotificationRecord, users: Iterable[str], burst: bool) -> dict[str, Counts]:
-    """Return what a stored notification adds to the rows of each view."""
-    return contributions(users, has_buttons(record.data), record.answers, burst)
+def counts_of(record: NotificationRecord, bursts: Mapping[str, bool]) -> dict[str, Counts]:
+    """Return what a stored notification adds to the rows of the views in bursts."""
+    return contributions(bursts, has_buttons(record.data), record.answers)
 
 
 class BurstWindow:
-    """Find where bursts start in notifications that arrive in order of time, per origin."""
+    """Find where bursts start in notifications that arrive in order of time, per view and origin."""
 
     def __init__(self) -> None:
         """Start without notifications."""
-        self._times: dict[str, deque[float]] = defaultdict(deque)
+        self._times: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 
-    def add(self, key: str, time: float) -> bool:
-        """Add a notification; return whether it starts a burst."""
-        times = self._times[key]
+    def add(self, view: str, key: str, time: float) -> bool:
+        """Add a notification of a view; return whether it starts a burst there."""
+        times = self._times[(view, key)]
         while times and times[0] <= time - BURST_WINDOW:
             times.popleft()
         times.append(time)
@@ -192,9 +197,11 @@ def period(kind: PeriodKind, offset: int, first_weekday: int, now: datetime) -> 
 
 
 def _hours(start: datetime, end: datetime) -> list[datetime]:
-    """Return the starts of the hours from start to end, 23 or 25 on a day daylight saving time changes."""
-    first = hour_of(start)
-    return [datetime.fromtimestamp(stamp, start.tzinfo) for stamp in range(first, int(end.timestamp()), HOUR)]
+    """Return the starts of the local hours from start to end, 23 or 25 on a day daylight saving time changes."""
+    return [
+        datetime.fromtimestamp(stamp, start.tzinfo)
+        for stamp in range(int(start.timestamp()), int(end.timestamp()), HOUR)
+    ]
 
 
 def bucket_index(kind: PeriodKind, start: datetime, local: datetime) -> int:
@@ -212,7 +219,7 @@ def year_start(now: datetime, years: int) -> datetime:
 
 
 def summarize(rows: Iterable[tuple[int, str, int, int, int, int]], current: Period, zone: tzinfo) -> dict[str, Any]:
-    """Turn hourly rows (hour, origin, notifications, with buttons, answered, bursts) into what the panel shows.
+    """Turn rows (slot, origin, notifications, with buttons, answered, bursts) into what the panel shows.
 
     Rows before the period count as the comparison; only those within the compared part of it should be passed.
     """
@@ -225,13 +232,13 @@ def summarize(rows: Iterable[tuple[int, str, int, int, int, int]], current: Peri
     origins: dict[str, dict[str, int]] = defaultdict(
         lambda: {"notifications": 0, "previous": 0, "with_buttons": 0, "answered": 0, "bursts": 0, "night": 0}
     )
-    for hour, origin, notifications, with_buttons, answered, bursts in rows:
+    for slot, origin, notifications, with_buttons, answered, bursts in rows:
         entry = origins[origin]
-        if not start <= hour < end:
+        if not start <= slot < end:
             previous_total += notifications
             entry["previous"] += notifications
             continue
-        local = datetime.fromtimestamp(hour, zone)
+        local = datetime.fromtimestamp(slot, zone)
         index = bucket_index(current.kind, current.start, local)
         if 0 <= index < len(buckets):
             buckets[index][origin] += notifications

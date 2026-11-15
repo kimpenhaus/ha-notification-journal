@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import tzinfo
 from typing import Any
 
 import voluptuous as vol
@@ -197,7 +198,7 @@ async def ws_statistics(hass: HomeAssistant, connection: websocket_api.ActiveCon
     if (scope := _store_and_scope(hass, connection, msg)) is None:
         return
     store, user_id = scope
-    zone = dt_util.get_time_zone(msg.get("time_zone") or hass.config.time_zone) or dt_util.get_default_time_zone()
+    zone = await _time_zone(msg.get("time_zone"))
     current = period(msg["period"], msg["offset"], msg["first_weekday"], dt_util.now(zone))
     ranges = [
         (current.compare_start.timestamp(), current.compare_end.timestamp()),
@@ -220,6 +221,7 @@ async def ws_statistics(hass: HomeAssistant, connection: websocket_api.ActiveCon
             "start": current.start.isoformat(),
             "end": current.end.isoformat(),
             "has_older": oldest is not None and oldest < current.start.timestamp(),
+            "comparable": oldest is not None and oldest <= current.compare_start.timestamp(),
             "kept_since": None if kept is None else dt_util.utc_from_timestamp(kept).isoformat(),
             **result,
         },
@@ -249,6 +251,17 @@ async def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConn
 
     connection.subscriptions[msg["id"]] = async_dispatcher_connect(hass, SIGNAL_CHANGED, _forward)
     connection.send_result(msg["id"])
+
+
+async def _time_zone(name: str | None) -> tzinfo:
+    """Return the time zone the caller sees, loaded without blocking; Home Assistant's own if none or unknown."""
+    if name:
+        try:
+            if (zone := await dt_util.async_get_time_zone(name)) is not None:
+                return zone
+        except ValueError:
+            pass
+    return dt_util.get_default_time_zone()
 
 
 def _non_admins_see_nothing(hass: HomeAssistant) -> bool:

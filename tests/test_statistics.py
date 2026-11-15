@@ -27,6 +27,7 @@ from custom_components.notification_journal.statistics import period, summarize,
 from custom_components.notification_journal.store import NotificationStore, _fill_counts
 
 BERLIN = ZoneInfo("Europe/Berlin")
+KOLKATA = ZoneInfo("Asia/Kolkata")
 ANNA = Recipient(kind=RecipientKind.PERSON, id="person.anna", name="Anna", user_id="user-anna")
 BEN = Recipient(kind=RecipientKind.PERSON, id="person.ben", name="Ben", user_id="user-ben")
 BELL = Recipient(kind=RecipientKind.EVERYONE, id="persistent_notification", name="Notifications")
@@ -136,6 +137,28 @@ async def test_a_burst_starts_with_the_fifth_notification_within_ten_minutes(sto
     assert counts["integration.server_watch"][3] == 0
 
 
+async def test_each_view_finds_its_own_bursts(store: NotificationStore) -> None:
+    start = dt_util.utcnow() - timedelta(hours=2)
+    for minute in range(4):
+        store.add(_record(f"anna{minute}", [ANNA], start + timedelta(minutes=minute)))
+    store.add(_record("ben", [BEN], start + timedelta(minutes=5)))
+    store.add(_record("family", [], start + timedelta(minutes=6), group="notify.family"))
+    store.add_inner_call("family", Call("notify.phone_anna", [ANNA], "c1"))
+
+    assert (await _counts(store))["automation.garage"][3] == 1
+    assert (await _counts(store, "user-anna"))["automation.garage"][3] == 1
+    assert (await _counts(store, "user-ben"))["automation.garage"][3] == 0
+
+
+async def test_nobody_sees_answers_to_everyone(store: NotificationStore) -> None:
+    store.add(_record("bell", [BELL], data=BUTTONS))
+    await store.async_flush()
+    await store.async_add_answer("notify", Answer(action="CLOSE", time=dt_util.utcnow(), user_id="user-ben"))
+
+    assert await _counts(store) == {"automation.garage": (1, 1, 1, 0)}
+    assert await _counts(store, "user-anna") == {"automation.garage": (1, 1, 0, 0)}
+
+
 async def test_counts_outlive_deleting_and_purging(store: NotificationStore) -> None:
     store.add(_record("old", [ANNA], dt_util.utcnow() - timedelta(days=40)))
     store.add(_record("new", [ANNA]))
@@ -169,6 +192,10 @@ async def test_filling_the_counts_of_older_notifications_matches_counting_them_a
     start = dt_util.utcnow() - timedelta(hours=5)
     for minute in range(6):
         store.add(_record(f"b{minute}", [ANNA, BEN], start + timedelta(minutes=minute), data=BUTTONS))
+    for minute in range(4):
+        store.add(_record(f"a{minute}", [ANNA], start + timedelta(minutes=20 + minute)))
+    store.add(_record("group", [], start + timedelta(minutes=25), group="notify.family"))
+    store.add_inner_call("group", Call("notify.phone_anna", [ANNA], "g1"))
     store.add(_record("bell", [BELL], start + timedelta(hours=1), origin=Origin(kind=OriginKind.SYSTEM)))
     store.add(_record("family", [], start + timedelta(hours=2), group="notify.family"))
     store.add_inner_call("family", Call("notify.phone_anna", [ANNA], "c1"))
@@ -181,6 +208,7 @@ async def test_filling_the_counts_of_older_notifications_matches_counting_them_a
     with connection:
         connection.execute("DELETE FROM notification_counts")
         connection.execute("UPDATE notifications SET burst = 0")
+        connection.execute("UPDATE notification_users SET burst = 0")
         _fill_counts(connection)
     connection.close()
     store = NotificationStore(str(tmp_path / "journal.db"))
@@ -210,6 +238,23 @@ def test_a_day_has_as_many_hours_as_the_clock_shows() -> None:
 
     assert len(spring.buckets) == 23
     assert len(autumn.buckets) == 25
+
+
+def test_a_half_hour_time_zone_keeps_its_hours() -> None:
+    day = period("day", 0, 0, datetime(2026, 11, 15, 12, tzinfo=KOLKATA))
+    just_after_midnight = int(datetime(2026, 11, 15, 0, 30, tzinfo=KOLKATA).timestamp())
+    day_before = int(datetime(2026, 11, 14, 23, 45, tzinfo=KOLKATA).timestamp())
+
+    summary = summarize(
+        [(just_after_midnight, "automation.garage", 1, 0, 0, 0), (day_before, "automation.garage", 2, 0, 0, 0)],
+        day,
+        KOLKATA,
+    )
+
+    assert len(day.buckets) == 24
+    assert day.buckets[0] == datetime(2026, 11, 15, tzinfo=KOLKATA)
+    assert summary["buckets"][0]["counts"] == {"automation.garage": 1}
+    assert summary["totals"]["notifications"] == 1
 
 
 def test_months_and_years_page_back() -> None:
@@ -283,13 +328,15 @@ async def test_statistics_command(
     await runtime.store.async_flush()
     hass.states.async_set("automation.garage", "on", {"friendly_name": "Garage gate"})
 
-    result = (await _call(await hass_ws_client(hass), type=f"{DOMAIN}/statistics", period="week", time_zone="UTC"))[
-        "result"
-    ]
+    client = await hass_ws_client(hass)
+    result = (await _call(client, type=f"{DOMAIN}/statistics", period="week", time_zone="UTC"))["result"]
     assert result["period"] == "week"
     assert len(result["buckets"]) == 7
     assert result["totals"]["notifications"] == 4
     assert result["has_older"] is False
+    assert result["comparable"] is False
+    fallback = (await _call(client, type=f"{DOMAIN}/statistics", period="day", time_zone="../etc/x"))["result"]
+    assert fallback["totals"]["notifications"] == 4
     assert result["kept_since"] is not None
     assert {o["key"]: o["name"] for o in result["origins"]} == {
         "automation.garage": "Garage gate",

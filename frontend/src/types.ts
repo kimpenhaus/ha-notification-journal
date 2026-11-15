@@ -82,6 +82,8 @@ export interface Filters {
   text: string;
   status: Status | "";
   origin: string;
+  /** The name of `origin` when it came from the statistics and the filter may not offer it. */
+  originName?: string;
   period: Period;
   /** The span of `period` "range", opened from the statistics. */
   range?: TimeRange;
@@ -116,6 +118,8 @@ export interface Statistics {
   start: string;
   end: string;
   has_older: boolean;
+  /** Whether the counts reach back to the start of the period compared with. */
+  comparable: boolean;
   kept_since: string | null;
   totals: { notifications: number; with_buttons: number; answered: number; bursts: number; night: number };
   previous: { notifications: number };
@@ -126,7 +130,7 @@ export interface Statistics {
 }
 
 export interface StatisticsSelection extends TimeRange {
-  origin?: string;
+  origin?: { key: string; name: string };
 }
 
 export interface HassEntityState {

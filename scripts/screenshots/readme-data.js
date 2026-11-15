@@ -93,6 +93,7 @@
       start: monday.toISOString(),
       end: new Date(monday.getTime() + 7 * 86400000).toISOString(),
       has_older: true,
+      comparable: true,
       kept_since: new Date(today.getTime() - 90 * 86400000).toISOString(),
       totals: { notifications: sum("notifications"), with_buttons: sum("with_buttons"), answered: sum("answered"), bursts: sum("bursts"), night: sum("night") },
       previous: { notifications: sum("previous") },
