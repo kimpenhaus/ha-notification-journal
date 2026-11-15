@@ -25,7 +25,7 @@ The origin comes from the trace context variable of the running automation or sc
 
 ## Database
 
-`notification_journal.db` next to `configuration.yaml`, SQLite with FTS5, accessed from one worker thread so writes keep their order; during a backup the worker waits. `SCHEMA` in `store.py` is the current state for a new database. A schema change raises `SCHEMA_VERSION` and adds a step to `MIGRATIONS`, from the previous version; on open, the store copies the database to `notification_journal.db.bak-v<version>` and runs each missing step in its own transaction. A database of a newer version is left untouched and the setup fails (`tests/test_migrations.py`).
+`notification_journal.db` next to `configuration.yaml`, SQLite with FTS5, accessed from one worker thread so writes keep their order; during a backup the worker waits. `SCHEMA` in `store.py` is the current state for a new database. A schema change raises `SCHEMA_VERSION` and adds a step to `MIGRATIONS`, from the previous version; on open, the store copies the database to `notification_journal.db.bak-v<version>` and runs each missing step in its own transaction. Every open removes the copies of earlier migrations, and the copy of the latest one once it is older than `MIGRATION_COPY_DAYS` (7): by then the migrated database has proved itself, and the copy would otherwise take as much space as the journal in every Home Assistant backup. A database of a newer version is left untouched and the setup fails (`tests/test_migrations.py`).
 
 ## Panel
 

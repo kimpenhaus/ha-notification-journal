@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sqlite3
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from homeassistant.util import dt as dt_util
@@ -33,6 +36,7 @@ _LOGGER = logging.getLogger(__name__)
 SCHEMA_VERSION = 4
 VISIBLE_TO_USER = f"rowid IN (SELECT notification FROM notification_users WHERE user_id IN (?, '{EVERYONE}'))"
 BACKUP_PAUSE_LIMIT = 1800
+MIGRATION_COPY_DAYS = 7
 ORIGIN_GROUP = "coalesce(origin_entity_id, 'integration.' || json_extract(origin, '$.integration'), origin_kind)"
 
 SCHEMA = """
@@ -290,6 +294,29 @@ class NotificationStore:
             connection.close()
             raise
         self._connection = connection
+        self._remove_migration_copies()
+
+    def _remove_migration_copies(self) -> None:
+        """Remove the copies made before migrations: all but the latest, and that one after MIGRATION_COPY_DAYS."""
+        database = Path(self._path)
+        name = re.compile(rf"{re.escape(database.name)}\.bak-v(\d+)")
+        try:
+            copies = sorted(
+                (int(match[1]), path) for path in database.parent.iterdir() if (match := name.fullmatch(path.name))
+            )
+        except OSError as error:
+            _LOGGER.warning("Could not look for old copies of %s: %s", database, error)
+            return
+        expired = time.time() - MIGRATION_COPY_DAYS * 86400
+        for index, (_, copy) in enumerate(copies):
+            try:
+                if index == len(copies) - 1 and copy.stat().st_mtime > expired:
+                    continue
+                copy.unlink()
+            except OSError as error:
+                _LOGGER.warning("Could not remove %s: %s", copy, error)
+                continue
+            _LOGGER.debug("Removed %s, a copy made before a schema migration", copy)
 
     def _migrate(self, connection: sqlite3.Connection) -> None:
         """Create a new database, or bring an older one to SCHEMA_VERSION step by step after a backup."""
