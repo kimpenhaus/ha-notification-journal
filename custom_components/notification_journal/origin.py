@@ -13,6 +13,7 @@ from .const import DOMAIN, INTEGRATION_KEY_PREFIX
 from .models import Origin, OriginKind
 
 KINDS = {"automation": OriginKind.AUTOMATION, "script": OriginKind.SCRIPT}
+KIND_KEYS = frozenset(kind.value for kind in OriginKind)
 NOT_CALLERS = {DOMAIN, PN_DOMAIN}
 """Integrations on the stack that only pass a notification on: this one, and the bell reporting a change."""
 
@@ -63,13 +64,16 @@ def _integration_name(hass: HomeAssistant, domain: str) -> str | None:
         return None
 
 
-def origin_key(origin: Origin) -> str | None:
-    """Return what identifies an origin across notifications: its automation or script, or its integration."""
+def origin_key(origin: Origin) -> str:
+    """Return what identifies an origin across notifications: its automation or script, its integration, else its kind.
+
+    Stored as `origin_key`; the view by origin, the origin filter and the statistics group by it.
+    """
     if origin.entity_id:
         return origin.entity_id
     if origin.integration:
         return f"{INTEGRATION_KEY_PREFIX}{origin.integration}"
-    return None
+    return origin.kind.value
 
 
 class OriginNames:
@@ -84,9 +88,9 @@ class OriginNames:
         self._hass = hass
         self._names: dict[str, str | None] = {}
 
-    def name(self, key: str | None, stored: str | None) -> str | None:
-        """Return the current name of the origin with this key, else the stored one."""
-        if key is None or "." not in key:
+    def name(self, key: str, stored: str | None) -> str | None:
+        """Return the current name of the origin with this key, else the stored one; a kind has no name of its own."""
+        if key in KIND_KEYS:
             return stored
         if key not in self._names:
             self._names[key] = self._lookup(key)

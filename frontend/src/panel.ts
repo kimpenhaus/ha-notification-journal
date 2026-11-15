@@ -28,8 +28,10 @@ import {
   mdiUnfoldMoreHorizontal,
 } from "./icons";
 import { countText, type Localize, localizer } from "./localize";
-import { originGlyph } from "./record";
-import { type NotificationJournalStatistics, originName, statisticsStyles } from "./statistics";
+import { originGlyph, originName } from "./record";
+import type { NotificationJournalStatistics } from "./statistics";
+import "./statistics";
+import { controlStyles } from "./styles";
 import type {
   Facets,
   Filters,
@@ -43,11 +45,12 @@ import type {
   Status,
   View,
 } from "./types";
+import { errorMessage, store, stored } from "./util";
 
 const PAGE_SIZE = 50;
 const ARCHIVE_BATCH = 200;
 const SEARCH_DELAY = 300;
-const PERIODS: Record<Exclude<Period, "" | "range">, number> = { day: 1, week: 7, month: 30, quarter: 90 };
+const PERIODS: Record<Exclude<Period, "">, number> = { day: 1, week: 7, month: 30, quarter: 90 };
 const STATUSES: Status[] = ["sent", "dismissed", "replaced"];
 const DEFAULT_FILTERS: Filters = {
   text: "",
@@ -60,22 +63,6 @@ const VIEW_KEY = "notification_journal.view";
 const ORDER_KEY = "notification_journal.newest_first";
 
 type Item = { day: string } | { group: string; record: NotificationRecord } | { record: NotificationRecord };
-
-function stored(key: string): string | null {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function store(key: string, value: string): void {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // Without storage the choice lasts until the page reloads.
-  }
-}
 
 /** The key of an origin's group, the same as `origin_key` in the store. */
 function groupKey(record: NotificationRecord): string {
@@ -99,11 +86,6 @@ function sameMap(left: Map<string, string>, right: Map<string, string>): boolean
 
 function errorCode(error: unknown): string | undefined {
   return typeof error === "object" && error && "code" in error ? String(error.code) : undefined;
-}
-
-function errorMessage(error: unknown): string {
-  if (typeof error === "object" && error && "message" in error) return String(error.message);
-  return String(error);
 }
 
 export class NotificationJournalPanel extends LitElement {
@@ -153,6 +135,9 @@ export class NotificationJournalPanel extends LitElement {
   private _searchTimer?: number;
   private _facetsTimer?: number;
   private _statisticsTimer?: number;
+  /** Names of origins the statistics opened, which the filter may not offer once their notifications are gone. */
+  private _originNames = new Map<string, string>();
+  private _keptSince: string | null = null;
   private _observer?: IntersectionObserver;
   private _localizer?: { language: string; localize: Localize };
   private _clockCache?: Clock;
@@ -257,10 +242,10 @@ export class NotificationJournalPanel extends LitElement {
     if (filters.origin) query.origin = filters.origin;
     if (this._archived) query.archived = true;
     if (this._view === "origin") query.group_by = "origin";
-    if (filters.period === "range" && filters.range) {
-      query.since = filters.range.since;
-      query.until = filters.range.until;
-    } else if (filters.period && filters.period !== "range") {
+    if (typeof filters.period === "object") {
+      query.since = filters.period.since;
+      query.until = filters.period.until;
+    } else if (filters.period) {
       query.since = new Date(Date.now() - PERIODS[filters.period] * 86_400_000).toISOString();
     }
     return query;
@@ -358,20 +343,14 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   /** Open the list on what a bar or an origin of the statistics stands for. */
-  private _openSelection(selection: StatisticsSelection): void {
-    const { origin, ...range } = selection;
+  private _openSelection({ range, origin, keptSince }: StatisticsSelection): void {
+    if (origin) this._originNames.set(origin.key, origin.name);
+    this._keptSince = keptSince;
     this._screen = "list";
     this._archived = false;
     this._search = "";
     window.clearTimeout(this._searchTimer);
-    this._set({
-      text: "",
-      status: "",
-      origin: origin?.key ?? "",
-      originName: origin?.name,
-      period: "range",
-      range,
-    });
+    this._set({ text: "", status: "", origin: origin?.key ?? "", period: range });
   }
 
   private _removed(recordId: string): void {
@@ -708,7 +687,9 @@ export class NotificationJournalPanel extends LitElement {
             html`<option value="" ?selected=${!filters.origin}>${localize("origin_all")}</option>
               ${
                 filters.origin && !facets.origins.some((option) => option.id === filters.origin)
-                  ? html`<option value=${filters.origin} selected>${filters.originName ?? filters.origin}</option>`
+                  ? html`<option value=${filters.origin} selected>
+                      ${this._originNames.get(filters.origin) ?? filters.origin}
+                    </option>`
                   : nothing
               }
               ${facets.origins.map(
@@ -719,16 +700,16 @@ export class NotificationJournalPanel extends LitElement {
               )}`,
           )}
           ${select(
-            filters.period,
+            typeof filters.period === "object" ? "range" : filters.period,
             "period",
             localize("period_all"),
             html`<option value="" ?selected=${!filters.period}>${localize("period_all")}</option>
               ${
-                filters.period === "range" && filters.range
-                  ? html`<option value="range" selected>${filters.range.label}</option>`
+                typeof filters.period === "object"
+                  ? html`<option value="range" selected>${filters.period.label}</option>`
                   : nothing
               }
-              ${(Object.keys(PERIODS) as Exclude<Period, "" | "range">[]).map(
+              ${(Object.keys(PERIODS) as Exclude<Period, "">[]).map(
                 (period) =>
                   html`<option value=${period} ?selected=${filters.period === period}>
                     ${localize(`period_${period}`)}
@@ -787,12 +768,11 @@ export class NotificationJournalPanel extends LitElement {
 
   /** Say so when the list opened from the statistics reaches back further than single notifications are kept. */
   private _keptNotice(localize: Localize): TemplateResult | typeof nothing {
-    const range = this._filters.period === "range" ? this._filters.range : undefined;
-    if (!range?.keptSince || Date.parse(range.keptSince) <= Date.parse(range.since)) return nothing;
+    const period = this._filters.period;
+    const kept = this._keptSince;
+    if (typeof period !== "object" || !kept || Date.parse(kept) <= Date.parse(period.since)) return nothing;
     const clock = this._clock;
-    const date = formatter(clock.language, { dateStyle: "medium", timeZone: clock.timeZone }).format(
-      new Date(range.keptSince),
-    );
+    const date = formatter(clock.language, { dateStyle: "medium", timeZone: clock.timeZone }).format(new Date(kept));
     return html`<p class="kept">${localize("kept_since", { date })}</p>`;
   }
 
@@ -898,17 +878,7 @@ export class NotificationJournalPanel extends LitElement {
     originIcons: Map<string, string>,
   ): TemplateResult {
     const origin = record.origin;
-    let name: string;
-    if (origin.kind === "automation" || origin.kind === "script") {
-      const state = origin.entity_id ? this._hass?.states[origin.entity_id] : undefined;
-      name = String(
-        state?.attributes.friendly_name ?? origin.name ?? origin.entity_id ?? localize(`origin_${origin.kind}`),
-      );
-    } else if (origin.kind === "integration") {
-      name = origin.name ?? origin.integration ?? localize("origin_integration");
-    } else {
-      name = localize(origin.kind === "user" ? "origin_by_hand" : `origin_${origin.kind}`);
-    }
+    const name = originName(localize, key, origin.name);
     const glyph = originGlyph(origin, originIcons);
     const section = `group-${key}`;
     const collapsed = this._collapsed.has(section);
@@ -924,471 +894,378 @@ export class NotificationJournalPanel extends LitElement {
     </button>`;
   }
 
-  static override styles = [
-    css`
-      :host {
-        display: flex;
-        flex-direction: column;
-        height: 100%;
-        background: var(--primary-background-color);
-        color: var(--primary-text-color);
-        font-family: var(--ha-font-family-body);
-        -webkit-font-smoothing: antialiased;
-      }
-      .toolbar {
-        flex: none;
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        box-sizing: border-box;
-        height: calc(var(--header-height, 56px) + var(--safe-area-inset-top, 0px));
-        padding: var(--safe-area-inset-top, 0px) 8px 0 12px;
-        background: var(--app-header-background-color);
-        color: var(--app-header-text-color);
-        border-bottom: var(--app-header-border-bottom);
-      }
-      h1 {
-        flex: 1;
-        margin: 0 0 0 12px;
-        font-size: 1.25rem;
-        font-weight: 400;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .icon {
-        width: 24px;
-        height: 24px;
-        fill: currentColor;
-        flex: none;
-      }
-      .icon-button {
-        display: grid;
-        place-items: center;
-        width: 44px;
-        height: 44px;
-        padding: 0;
-        border: none;
-        border-radius: 50%;
-        background: none;
-        color: inherit;
-        cursor: pointer;
-      }
-      .icon-button:hover {
-        background: color-mix(in srgb, currentColor 10%, transparent);
-      }
-      .icon-button.small {
-        width: 32px;
-        height: 32px;
-        color: var(--secondary-text-color);
-      }
-      .icon-button.small .icon {
-        width: 18px;
-        height: 18px;
-      }
-      .content {
-        flex: 1;
-        overflow-y: auto;
-        padding-bottom: var(--safe-area-inset-bottom, 0px);
-      }
+  static override styles = css`
+    ${controlStyles}
+    :host {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      background: var(--primary-background-color);
+      color: var(--primary-text-color);
+      font-family: var(--ha-font-family-body);
+      -webkit-font-smoothing: antialiased;
+    }
+    .toolbar {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      box-sizing: border-box;
+      height: calc(var(--header-height, 56px) + var(--safe-area-inset-top, 0px));
+      padding: var(--safe-area-inset-top, 0px) 8px 0 12px;
+      background: var(--app-header-background-color);
+      color: var(--app-header-text-color);
+      border-bottom: var(--app-header-border-bottom);
+    }
+    h1 {
+      flex: 1;
+      margin: 0 0 0 12px;
+      font-size: 1.25rem;
+      font-weight: 400;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .content {
+      flex: 1;
+      overflow-y: auto;
+      padding-bottom: var(--safe-area-inset-bottom, 0px);
+    }
+    .wrapper {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 16px 16px 32px;
+      box-sizing: border-box;
+    }
+    .filters {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .search {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 48px;
+      padding: 0 8px 0 14px;
+      border-radius: 24px;
+      background: var(--card-background-color);
+      border: 1px solid var(--divider-color);
+      color: var(--secondary-text-color);
+    }
+    .search:focus-within {
+      border-color: var(--primary-color);
+    }
+    .search input {
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      border: none;
+      outline: none;
+      background: none;
+      color: var(--primary-text-color);
+      font: inherit;
+      font-size: 1rem;
+    }
+    .search input::-webkit-search-cancel-button {
+      display: none;
+    }
+    .selects {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .select {
+      position: relative;
+      display: inline-flex;
+      max-width: 200px;
+    }
+    .select select {
+      width: 100%;
+    }
+    .select::after {
+      content: "";
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      width: 6px;
+      height: 6px;
+      margin-top: -5px;
+      border-right: 2px solid currentColor;
+      border-bottom: 2px solid currentColor;
+      transform: rotate(45deg);
+      pointer-events: none;
+      color: var(--secondary-text-color);
+    }
+    select,
+    .sort {
+      appearance: none;
+      max-width: 100%;
+      height: 34px;
+      padding: 0 32px 0 14px;
+      border-radius: 17px;
+      border: 1px solid var(--divider-color);
+      background: var(--card-background-color);
+      color: var(--primary-text-color);
+      font: inherit;
+      font-size: 0.875rem;
+      text-overflow: ellipsis;
+      cursor: pointer;
+    }
+    .select.active select {
+      border-color: var(--primary-color);
+      background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
+    }
+    option,
+    optgroup {
+      color: var(--primary-text-color);
+      background: var(--card-background-color);
+    }
+    .sort {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 14px 0 10px;
+    }
+    .sort .icon {
+      width: 18px;
+      height: 18px;
+      color: var(--secondary-text-color);
+    }
+    .summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 32px;
+      color: var(--secondary-text-color);
+      font-size: 0.875rem;
+    }
+    .text-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border: none;
+      border-radius: 6px;
+      background: none;
+      color: var(--primary-color);
+      font: inherit;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .text-button .icon {
+      width: 18px;
+      height: 18px;
+    }
+    .text-button:hover {
+      background: color-mix(in srgb, var(--primary-color) 10%, transparent);
+    }
+    .text-button[disabled] {
+      color: var(--disabled-text-color);
+      cursor: default;
+    }
+    .list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .section {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      border: none;
+      text-align: left;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .section > .icon {
+      width: 20px;
+      height: 20px;
+      color: var(--secondary-text-color);
+      transition: transform 0.15s;
+    }
+    .section.collapsed > .icon {
+      transform: rotate(-90deg);
+    }
+    .day {
+      gap: 6px;
+      margin: 14px 0 0;
+      padding: 4px 0;
+      background: none;
+      font-size: 0.8rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--secondary-text-color);
+    }
+    .day:first-child {
+      margin-top: 4px;
+    }
+    .group {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 14px 0 0;
+      padding: 8px 4px;
+      font-size: 1rem;
+      font-weight: 500;
+      color: var(--primary-text-color);
+      background: var(--primary-background-color);
+    }
+    .group:first-child {
+      margin-top: 0;
+    }
+    .section.collapsed + .section {
+      margin-top: 4px;
+    }
+    .spacer {
+      flex: 1;
+    }
+    .notice {
+      margin-left: 12px;
+      color: var(--error-color);
+    }
+    .kept {
+      margin: 0;
+      color: var(--secondary-text-color);
+      font-size: 0.875rem;
+    }
+    .group-icon {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      color: var(--primary-color);
+      background: color-mix(in srgb, var(--primary-color) 14%, transparent);
+    }
+    .group-icon .icon {
+      width: 18px;
+      height: 18px;
+    }
+    .group-icon ha-icon {
+      --mdc-icon-size: 18px;
+      display: inline-flex;
+    }
+    .group-name {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .group-count {
+      min-width: 22px;
+      padding: 1px 8px;
+      box-sizing: border-box;
+      border-radius: 11px;
+      font-size: 0.8rem;
+      text-align: center;
+      color: var(--secondary-text-color);
+      background: var(--secondary-background-color);
+    }
+    .options {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .toolbar.selecting {
+      background: var(--primary-color);
+      color: var(--text-primary-color);
+    }
+    .toolbar-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 36px;
+      padding: 0 12px;
+      border: none;
+      border-radius: 18px;
+      background: none;
+      color: inherit;
+      font: inherit;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .toolbar-button .icon {
+      width: 20px;
+      height: 20px;
+    }
+    .toolbar-button:hover {
+      background: color-mix(in srgb, currentColor 12%, transparent);
+    }
+    .toolbar-button.strong {
+      background: color-mix(in srgb, currentColor 18%, transparent);
+    }
+    .toolbar-button[disabled] {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .pending {
+      position: sticky;
+      top: 8px;
+      z-index: 1;
+      display: block;
+      margin: 0 auto 10px;
+      padding: 8px 18px;
+      border: none;
+      border-radius: 18px;
+      background: var(--primary-color);
+      color: var(--text-primary-color);
+      font: inherit;
+      font-size: 0.875rem;
+      font-weight: 500;
+      box-shadow: var(--ha-card-box-shadow, none);
+      cursor: pointer;
+    }
+    .sentinel {
+      display: flex;
+      justify-content: center;
+      padding: 16px 0;
+    }
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    @media (max-width: 600px) {
       .wrapper {
-        max-width: 1040px;
-        margin: 0 auto;
-        padding: 16px 16px 32px;
-        box-sizing: border-box;
-      }
-      .filters {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-      .search {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        height: 48px;
-        padding: 0 8px 0 14px;
-        border-radius: 24px;
-        background: var(--card-background-color);
-        border: 1px solid var(--divider-color);
-        color: var(--secondary-text-color);
-      }
-      .search:focus-within {
-        border-color: var(--primary-color);
-      }
-      .search input {
-        flex: 1;
-        min-width: 0;
-        height: 100%;
-        border: none;
-        outline: none;
-        background: none;
-        color: var(--primary-text-color);
-        font: inherit;
-        font-size: 1rem;
-      }
-      .search input::-webkit-search-cancel-button {
-        display: none;
+        padding: 12px 8px 24px;
       }
       .selects {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
-      .select {
-        position: relative;
-        display: inline-flex;
-        max-width: 200px;
-      }
-      .select select {
-        width: 100%;
-      }
-      .select::after {
-        content: "";
-        position: absolute;
-        right: 12px;
-        top: 50%;
-        width: 6px;
-        height: 6px;
-        margin-top: -5px;
-        border-right: 2px solid currentColor;
-        border-bottom: 2px solid currentColor;
-        transform: rotate(45deg);
-        pointer-events: none;
-        color: var(--secondary-text-color);
-      }
-      select,
-      .sort {
-        appearance: none;
-        max-width: 100%;
-        height: 34px;
-        padding: 0 32px 0 14px;
-        border-radius: 17px;
-        border: 1px solid var(--divider-color);
-        background: var(--card-background-color);
-        color: var(--primary-text-color);
-        font: inherit;
-        font-size: 0.875rem;
-        text-overflow: ellipsis;
-        cursor: pointer;
-      }
-      .select.active select {
-        border-color: var(--primary-color);
-        background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
-      }
-      option,
-      optgroup {
-        color: var(--primary-text-color);
-        background: var(--card-background-color);
-      }
-      .sort {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 0 14px 0 10px;
-      }
-      .sort .icon {
-        width: 18px;
-        height: 18px;
-        color: var(--secondary-text-color);
-      }
-      select:focus-visible,
-      button:focus-visible {
-        outline: 2px solid var(--primary-color);
-        outline-offset: 2px;
-      }
-      .summary {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        min-height: 32px;
-        color: var(--secondary-text-color);
-        font-size: 0.875rem;
-      }
-      .text-button {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 10px;
-        border: none;
-        border-radius: 6px;
-        background: none;
-        color: var(--primary-color);
-        font: inherit;
-        font-size: 0.875rem;
-        font-weight: 500;
-        cursor: pointer;
-      }
-      .text-button .icon {
-        width: 18px;
-        height: 18px;
-      }
-      .text-button:hover {
-        background: color-mix(in srgb, var(--primary-color) 10%, transparent);
-      }
-      .text-button[disabled] {
-        color: var(--disabled-text-color);
-        cursor: default;
-      }
-      .list.busy {
-        opacity: 0.6;
-        transition: opacity 0.2s 0.15s;
-      }
-      .list {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-      .section {
-        display: flex;
-        align-items: center;
-        width: 100%;
-        border: none;
-        text-align: left;
-        font-family: inherit;
-        cursor: pointer;
-      }
-      .section > .icon {
-        width: 20px;
-        height: 20px;
-        color: var(--secondary-text-color);
-        transition: transform 0.15s;
-      }
-      .section.collapsed > .icon {
-        transform: rotate(-90deg);
-      }
-      .day {
-        gap: 6px;
-        margin: 14px 0 0;
-        padding: 4px 0;
-        background: none;
-        font-size: 0.8rem;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--secondary-text-color);
-      }
-      .day:first-child {
-        margin-top: 4px;
-      }
-      .group {
-        position: sticky;
-        top: 0;
-        z-index: 1;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin: 14px 0 0;
-        padding: 8px 4px;
-        font-size: 1rem;
-        font-weight: 500;
-        color: var(--primary-text-color);
-        background: var(--primary-background-color);
-      }
-      .group:first-child {
-        margin-top: 0;
-      }
-      .section.collapsed + .section {
-        margin-top: 4px;
-      }
-      .spacer {
-        flex: 1;
-      }
-      .notice {
-        margin-left: 12px;
-        color: var(--error-color);
-      }
-      .kept {
-        margin: 0;
-        color: var(--secondary-text-color);
-        font-size: 0.875rem;
-      }
-      .group-icon {
         display: grid;
-        place-items: center;
-        width: 32px;
-        height: 32px;
-        border-radius: 50%;
-        color: var(--primary-color);
-        background: color-mix(in srgb, var(--primary-color) 14%, transparent);
-      }
-      .group-icon .icon {
-        width: 18px;
-        height: 18px;
-      }
-      .group-icon ha-icon {
-        --mdc-icon-size: 18px;
-        display: inline-flex;
-      }
-      .group-name {
-        flex: 1;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .group-count {
-        min-width: 22px;
-        padding: 1px 8px;
-        box-sizing: border-box;
-        border-radius: 11px;
-        font-size: 0.8rem;
-        text-align: center;
-        color: var(--secondary-text-color);
-        background: var(--secondary-background-color);
+        grid-template-columns: 1fr 1fr;
       }
       .view {
-        display: inline-flex;
-        height: 34px;
-        padding: 2px;
-        box-sizing: border-box;
-        border-radius: 17px;
-        border: 1px solid var(--divider-color);
-        background: var(--card-background-color);
+        grid-column: 1 / -1;
       }
-      .view button {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 0 12px;
-        border: none;
-        border-radius: 15px;
-        background: none;
-        color: var(--secondary-text-color);
-        font: inherit;
-        font-size: 0.875rem;
-        cursor: pointer;
-      }
-      .view button .icon {
-        width: 18px;
-        height: 18px;
-      }
-      .options {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 8px;
-      }
-      .toolbar.selecting {
-        background: var(--primary-color);
-        color: var(--text-primary-color);
+      .toolbar-button span {
+        display: none;
       }
       .toolbar-button {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        height: 36px;
-        padding: 0 12px;
-        border: none;
-        border-radius: 18px;
-        background: none;
-        color: inherit;
-        font: inherit;
-        font-size: 0.875rem;
-        font-weight: 500;
-        cursor: pointer;
+        padding: 0 10px;
       }
-      .toolbar-button .icon {
-        width: 20px;
-        height: 20px;
-      }
-      .toolbar-button:hover {
-        background: color-mix(in srgb, currentColor 12%, transparent);
-      }
-      .toolbar-button.strong {
-        background: color-mix(in srgb, currentColor 18%, transparent);
-      }
-      .toolbar-button[disabled] {
-        opacity: 0.5;
-        cursor: default;
-      }
-      .view button.selected {
-        color: var(--text-primary-color);
-        background: var(--primary-color);
-      }
-      .pending {
-        position: sticky;
-        top: 8px;
-        z-index: 1;
-        display: block;
-        margin: 0 auto 10px;
-        padding: 8px 18px;
-        border: none;
-        border-radius: 18px;
-        background: var(--primary-color);
-        color: var(--text-primary-color);
-        font: inherit;
-        font-size: 0.875rem;
-        font-weight: 500;
-        box-shadow: var(--ha-card-box-shadow, none);
-        cursor: pointer;
-      }
-      .sentinel {
-        display: flex;
+      .view button {
+        flex: 1;
         justify-content: center;
-        padding: 16px 0;
       }
-      .empty {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        padding: 64px 16px;
-        text-align: center;
-        color: var(--secondary-text-color);
+      .select {
+        max-width: none;
       }
-      .empty .icon {
-        width: 56px;
-        height: 56px;
-        opacity: 0.5;
+      .sort {
+        justify-content: center;
       }
-      .empty h2 {
-        margin: 16px 0 4px;
-        font-size: 1.1rem;
-        font-weight: 500;
-        color: var(--primary-text-color);
-      }
-      .empty p {
-        margin: 8px 0;
-      }
-      .visually-hidden {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip-path: inset(50%);
-        white-space: nowrap;
-      }
-      @media (max-width: 600px) {
-        .wrapper {
-          padding: 12px 8px 24px;
-        }
-        .selects {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-        }
-        .view {
-          grid-column: 1 / -1;
-        }
-        .toolbar-button span {
-          display: none;
-        }
-        .toolbar-button {
-          padding: 0 10px;
-        }
-        .view button {
-          flex: 1;
-          justify-content: center;
-        }
-        .select {
-          max-width: none;
-        }
-        .sort {
-          justify-content: center;
-        }
-      }
-    `,
-    statisticsStyles,
-  ];
+    }
+  `;
 }
 
 if (!customElements.get("notification-journal-panel")) {

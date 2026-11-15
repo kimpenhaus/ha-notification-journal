@@ -32,21 +32,15 @@ from .models import (
     origin_from_dict,
     recipient_from_dict,
 )
+from .origin import origin_key
 from .statistics import (
     ALL,
-    BURST_SIZE,
-    BURST_WINDOW,
     COUNTS_SCHEMA,
     UPSERT_COUNTS,
-    BurstWindow,
-    Counts,
     contributions,
     counts_of,
     difference,
-    group_key,
-    has_buttons,
     slot_of,
-    view_keys,
     year_start,
 )
 
@@ -59,7 +53,7 @@ MIGRATION_COPY_DAYS = 7
 ORIGIN_KEY_OF_ROW = (
     f"coalesce(origin_entity_id, '{INTEGRATION_KEY_PREFIX}' || json_extract(origin, '$.integration'), origin_kind)"
 )
-"""The origin key (`statistics.group_key`) of a stored row, to fill `origin_key` in migration 5."""
+"""`origin.origin_key` of a stored row, to fill `origin_key` in migration 5."""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notifications (
@@ -84,8 +78,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     status_time REAL,
     status_by TEXT,
     answers TEXT NOT NULL DEFAULT '[]',
-    origin_key TEXT NOT NULL DEFAULT '',
-    burst INTEGER NOT NULL DEFAULT 0
+    origin_key TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS notifications_time ON notifications (time);
 CREATE INDEX IF NOT EXISTS notifications_origin ON notifications (origin_entity_id);
@@ -93,7 +86,6 @@ CREATE INDEX IF NOT EXISTS notifications_origin_key ON notifications (origin_key
 CREATE TABLE IF NOT EXISTS notification_users (
     notification INTEGER NOT NULL REFERENCES notifications (rowid) ON DELETE CASCADE,
     user_id TEXT NOT NULL,
-    burst INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (notification, user_id)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS notification_users_user ON notification_users (user_id);
@@ -113,34 +105,30 @@ END;
 
 
 def _fill_counts(db: sqlite3.Connection) -> None:
-    """Count the notifications already stored, in order of time, as they are counted when they arrive."""
-    users: defaultdict[int, set[str]] = defaultdict(set)
-    for rowid, user_id in db.execute("SELECT notification, user_id FROM notification_users"):
-        users[rowid].add(user_id)
-    window = BurstWindow()
-    totals: defaultdict[tuple[str, int, str], list[int]] = defaultdict(lambda: [0, 0, 0, 0])
-    starts: list[tuple[int]] = []
-    user_starts: list[tuple[int, str]] = []
-    rows = db.execute("SELECT rowid, time, data, origin_key, answers FROM notifications ORDER BY time, rowid")
-    for rowid, sent, data, key, answers in rows.fetchall():
-        bursts = {ALL: window.add(ALL, key, sent)}
-        for user_id in sorted(users[rowid]):
-            burst = window.add(user_id, key, sent)
-            if burst:
-                user_starts.append((rowid, user_id))
-            bursts[user_id] = burst
-        if bursts[ALL]:
-            starts.append((rowid,))
-        views = {view: bursts[view] for view in (ALL, *view_keys(users[rowid]))}
-        buttons = has_buttons(None if data is None else json.loads(data))
+    """Count the notifications already stored as they are counted when they arrive.
+
+    The rows come in order of time and the counts of a quarter hour are written once the next one starts, so the
+    memory needed stays the same however large the journal is.
+    """
+    rows = db.execute(
+        """SELECT time, origin_key, json_array_length(data, '$.data.actions') > 0, answers,
+               (SELECT group_concat(user_id, char(31)) FROM notification_users WHERE notification = n.rowid)
+           FROM notifications n ORDER BY time"""
+    )
+    totals: defaultdict[tuple[str, int, str], list[int]] = defaultdict(lambda: [0, 0, 0])
+    current = None
+    for sent, key, buttons, answers, users in rows:
+        slot = slot_of(sent)
+        if slot != current:
+            db.executemany(UPSERT_COUNTS, [(*row, *values) for row, values in totals.items()])
+            totals.clear()
+            current = slot
         stored_answers = [answer_from_dict(a) for a in json.loads(answers)]
-        for user_id, counts in contributions(views, buttons, stored_answers).items():
-            total = totals[(user_id, slot_of(sent), key)]
+        for view, counts in contributions(users.split("\x1f") if users else [], bool(buttons), stored_answers).items():
+            total = totals[(view, slot, key)]
             for index, value in enumerate(counts):
                 total[index] += value
-    db.executemany("UPDATE notifications SET burst = 1 WHERE rowid = ?", starts)
-    db.executemany("UPDATE notification_users SET burst = 1 WHERE notification = ? AND user_id = ?", user_starts)
-    db.executemany(UPSERT_COUNTS, [(*key, *values) for key, values in totals.items()])
+    db.executemany(UPSERT_COUNTS, [(*row, *values) for row, values in totals.items()])
 
 
 Migration = str | Callable[[sqlite3.Connection], None]
@@ -164,8 +152,6 @@ MIGRATIONS: dict[int, tuple[Migration, ...]] = {
     4: ("ALTER TABLE notifications ADD COLUMN answers TEXT NOT NULL DEFAULT '[]'",),
     5: (
         "ALTER TABLE notifications ADD COLUMN origin_key TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE notifications ADD COLUMN burst INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE notification_users ADD COLUMN burst INTEGER NOT NULL DEFAULT 0",
         f"UPDATE notifications SET origin_key = {ORIGIN_KEY_OF_ROW}",
         "CREATE INDEX notifications_origin_key ON notifications (origin_key, time)",
         *COUNTS_SCHEMA,
@@ -202,6 +188,23 @@ class Query:
 
 
 @dataclass(slots=True)
+class CountedRows:
+    """The counts of one view by quarter hour and origin, with what the statistics need around them."""
+
+    rows: list[tuple[int, str, int, int, int]]
+    previous: dict[str, int]
+    """The notifications of each origin in the span compared with."""
+    oldest: int | None
+    """The oldest quarter hour counted for the view."""
+    counting_since: int | None
+    """The oldest quarter hour counted at all: how far back a comparison can reach."""
+    kept_since: float | None
+    """When the oldest notification still kept was sent."""
+    names: dict[str, str | None]
+    """The name stored with the newest notification of each origin in rows, where one is kept."""
+
+
+@dataclass(slots=True)
 class Page:
     """One page of records and the number of all that match."""
 
@@ -217,11 +220,6 @@ def _fts_query(text: str) -> str | None:
 
 def _people(record: NotificationRecord) -> str:
     return " ".join(sorted({r.name for r in record.all_recipients}))
-
-
-def _views(burst: int | bool, users: dict[str, bool]) -> dict[str, bool]:
-    """Return the views a notification counts for, with whether it starts a burst in each."""
-    return {ALL: bool(burst), **{view: users[view] for view in view_keys(users)}}
 
 
 class NotificationStore:
@@ -311,17 +309,13 @@ class NotificationStore:
         return await self._run(self._facets, user_id)
 
     async def async_statistics(
-        self, user_id: str | None, ranges: list[tuple[float, float]]
-    ) -> tuple[list[tuple[int, str, int, int, int, int]], int | None, float | None]:
-        """Return the counts within the ranges, for administrators or a user's view, by quarter hour and origin.
+        self, user_id: str | None, current: tuple[float, float], compared: tuple[float, float]
+    ) -> CountedRows:
+        """Return the counts of a span by quarter hour and origin, and of the span compared with by origin.
 
-        Also return the oldest quarter hour counted for that view and the time of the oldest record kept.
+        For administrators, or a user's view if user_id is given.
         """
-        return await self._run(self._statistics, user_id, ranges)
-
-    async def async_stored_names(self, keys: list[str]) -> dict[str, str]:
-        """Return the names stored with the newest notification of each origin key."""
-        return await self._run(self._stored_names, keys)
+        return await self._run(self._statistics, user_id, current, compared)
 
     async def async_get(self, record_id: str) -> NotificationRecord | None:
         """Return one record."""
@@ -462,18 +456,15 @@ class NotificationStore:
 
     def _insert(self, record: NotificationRecord) -> None:
         db = self._db()
-        key = group_key(record.origin)
-        sent = record.time.timestamp()
         with db:
-            burst = self._starts_burst(db, ALL, key, sent)
             cursor = db.execute(
                 """INSERT INTO notifications (id, time, source, channel, title, message, data, recipients, origin,
                        origin_kind, origin_entity_id, context_id, status, error, grp, inner_calls, source_ref,
-                       status_time, status_by, answers, origin_key, burst)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       status_time, status_by, answers, origin_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     record.id,
-                    sent,
+                    record.time.timestamp(),
                     record.source,
                     record.channel,
                     record.title,
@@ -492,34 +483,28 @@ class NotificationStore:
                     record.status_time.timestamp() if record.status_time else None,
                     json.dumps(asdict(record.status_by)) if record.status_by else None,
                     json.dumps([answer.as_dict() for answer in record.answers]),
-                    key,
-                    int(burst),
+                    origin_key(record.origin),
                 ),
             )
-            rowid = cursor.lastrowid
-            users = self._index(db, rowid, record, key)
-            self._count(db, sent, key, counts_of(record, _views(burst, users)))
+            self._index(db, cursor.lastrowid, record)
+            self._recount(db, None, record)
 
     def _append_call(self, record_id: str, call: Call) -> None:
         db = self._db()
         with db:
-            row = db.execute("SELECT rowid, burst, origin_key FROM notifications WHERE id = ?", (record_id,)).fetchone()
+            row = db.execute("SELECT rowid FROM notifications WHERE id = ?", (record_id,)).fetchone()
             if row is None:
                 return
-            rowid, burst, key = row
-            before = self._get_by_rowid(db, rowid)
-            users_before = self._user_bursts(db, rowid)
+            before = self._get_by_rowid(db, row[0])
+            if before is None:
+                return
             db.execute(
                 "UPDATE notifications SET inner_calls = json_insert(inner_calls, '$[#]', json(?)) WHERE rowid = ?",
-                (json.dumps(asdict(call)), rowid),
+                (json.dumps(asdict(call)), row[0]),
             )
-            record = self._get_by_rowid(db, rowid)
-            if before is not None and record is not None:
-                users = self._index(db, rowid, record, key)
-                changes = difference(
-                    counts_of(before, _views(burst, users_before)), counts_of(record, _views(burst, users))
-                )
-                self._count(db, record.time.timestamp(), key, changes)
+            record = replace(before, inner_calls=[*before.inner_calls, call])
+            self._index(db, row[0], record)
+            self._recount(db, before, record)
 
     def _update_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
         db = self._db()
@@ -532,7 +517,7 @@ class NotificationStore:
     def _add_answer(self, source: str, answer: Answer) -> str | None:
         db = self._db()
         offered = (
-            "SELECT rowid, id, burst, origin_key FROM notifications WHERE source = ? AND EXISTS "
+            "SELECT rowid, id FROM notifications WHERE source = ? AND EXISTS "
             "(SELECT 1 FROM json_each(data, '$.data.actions') WHERE json_extract(value, '$.action') = ?)"
         )
         newest = " ORDER BY time DESC, rowid DESC LIMIT 1"
@@ -546,20 +531,15 @@ class NotificationStore:
             row = db.execute(offered + newest, (source, answer.action)).fetchone()
         if row is None:
             return None
-        rowid, record_id, burst, key = row
         with db:
-            before = self._get_by_rowid(db, rowid)
+            before = self._get_by_rowid(db, row[0])
             db.execute(
                 "UPDATE notifications SET answers = json_insert(answers, '$[#]', json(?)) WHERE rowid = ?",
-                (json.dumps(answer.as_dict()), rowid),
+                (json.dumps(answer.as_dict()), row[0]),
             )
             if before is not None:
-                views = _views(burst, self._user_bursts(db, rowid))
-                after = replace(before, answers=[*before.answers, answer])
-                self._count(
-                    db, before.time.timestamp(), key, difference(counts_of(before, views), counts_of(after, views))
-                )
-        return record_id
+                self._recount(db, before, replace(before, answers=[*before.answers, answer]))
+        return row[1]
 
     def _open_records(self, source: str) -> dict[str, tuple[str, datetime]]:
         rows = self._db().execute(
@@ -569,47 +549,28 @@ class NotificationStore:
         return {ref: (record_id, dt_util.utc_from_timestamp(time)) for ref, record_id, time in rows}
 
     @staticmethod
-    def _count(db: sqlite3.Connection, sent: float, key: str, changes: dict[str, Counts]) -> None:
-        slot = slot_of(sent)
-        db.executemany(UPSERT_COUNTS, [(user_id, slot, key, *counts) for user_id, counts in changes.items()])
+    def _recount(db: sqlite3.Connection, before: NotificationRecord | None, after: NotificationRecord) -> None:
+        """Move a notification's counts from what it was (None when new) to what it is."""
+        if changes := difference(counts_of(before), counts_of(after)):
+            db.executemany(
+                UPSERT_COUNTS,
+                [
+                    (view, slot_of(after.time.timestamp()), origin_key(after.origin), *counts)
+                    for view, counts in changes.items()
+                ],
+            )
 
     @staticmethod
-    def _starts_burst(db: sqlite3.Connection, view: str, key: str, sent: float) -> bool:
-        """Return whether a notification not yet counted in a view starts a burst there (`BurstWindow`)."""
-        if view == ALL:
-            query = "SELECT count(*) FROM notifications WHERE origin_key = ? AND time > ? AND time <= ?"
-            params: tuple[Any, ...] = (key, sent - BURST_WINDOW, sent)
-        else:
-            query = (
-                "SELECT count(*) FROM notification_users u JOIN notifications n ON n.rowid = u.notification "
-                "WHERE u.user_id = ? AND n.origin_key = ? AND n.time > ? AND n.time <= ?"
-            )
-            params = (view, key, sent - BURST_WINDOW, sent)
-        return db.execute(query, params).fetchone()[0] + 1 == BURST_SIZE
-
-    @staticmethod
-    def _user_bursts(db: sqlite3.Connection, rowid: int) -> dict[str, bool]:
-        rows = db.execute("SELECT user_id, burst FROM notification_users WHERE notification = ?", (rowid,))
-        return {user_id: bool(burst) for user_id, burst in rows}
-
-    def _index(
-        self, db: sqlite3.Connection, rowid: int | None, record: NotificationRecord, key: str
-    ) -> dict[str, bool]:
-        """Add the users a record reached and index its text; return its users and whether it starts a burst there."""
-        users = self._user_bursts(db, rowid) if rowid is not None else {}
-        sent = record.time.timestamp()
-        for user_id in sorted(record.user_ids - users.keys()):
-            users[user_id] = self._starts_burst(db, user_id, key, sent)
-            db.execute(
-                "INSERT INTO notification_users (notification, user_id, burst) VALUES (?, ?, ?)",
-                (rowid, user_id, int(users[user_id])),
-            )
+    def _index(db: sqlite3.Connection, rowid: int | None, record: NotificationRecord) -> None:
+        db.executemany(
+            "INSERT OR IGNORE INTO notification_users (notification, user_id) VALUES (?, ?)",
+            [(rowid, user_id) for user_id in record.user_ids],
+        )
         db.execute("DELETE FROM notifications_fts WHERE rowid = ?", (rowid,))
         db.execute(
             "INSERT INTO notifications_fts (rowid, title, message, channel, people, origin) VALUES (?, ?, ?, ?, ?, ?)",
             (rowid, record.title or "", record.message, record.channel, _people(record), record.origin.name or ""),
         )
-        return users
 
     def _set_archived(self, record_ids: list[str], user_id: str, archived: bool, visible_to: str | None) -> int:
         db = self._db()
@@ -696,43 +657,46 @@ class NotificationStore:
         ).fetchall()
         return Page(records=[self._from_row(row) for row in rows], total=total, groups=groups)
 
-    def _facets(self, user_id: str | None) -> dict[str, list[dict[str, str | None]]]:
-        where = f"WHERE {VISIBLE_TO_USER}" if user_id else ""
-        params = [user_id] if user_id else []
-        origins = (
-            self._db()
-            .execute(
-                f"SELECT origin_key, json_extract(origin, '$.name'), max(time) FROM notifications {where} "
-                "GROUP BY origin_key",
-                params,
-            )
-            .fetchall()
+    def _stored_names(self, keys: str, params: list[Any]) -> dict[str, str | None]:
+        """Return the name stored with the newest notification of each origin key the query `keys` selects."""
+        rows = self._db().execute(
+            f"""SELECT k.key, (SELECT json_extract(origin, '$.name') FROM notifications
+                                WHERE origin_key = k.key ORDER BY time DESC LIMIT 1)
+                FROM ({keys}) k""",
+            params,
         )
-        return {"origins": [{"id": row[0], "name": row[1]} for row in origins]}
+        return dict(rows.fetchall())
+
+    def _facets(self, user_id: str | None) -> dict[str, list[dict[str, str | None]]]:
+        keys = "SELECT DISTINCT origin_key AS key FROM notifications"
+        names = (
+            self._stored_names(f"{keys} WHERE {VISIBLE_TO_USER}", [user_id])
+            if user_id
+            else self._stored_names(keys, [])
+        )
+        return {"origins": [{"id": key, "name": name} for key, name in names.items()]}
 
     def _statistics(
-        self, user_id: str | None, ranges: list[tuple[float, float]]
-    ) -> tuple[list[tuple[int, str, int, int, int, int]], int | None, float | None]:
+        self, user_id: str | None, current: tuple[float, float], compared: tuple[float, float]
+    ) -> CountedRows:
         db = self._db()
         users = [ALL] if user_id is None else [user_id, EVERYONE]
         view = f"user_id IN ({', '.join('?' * len(users))})"
-        within = " OR ".join("(slot >= ? AND slot < ?)" for _ in ranges)
+        within = f"FROM notification_counts WHERE {view} AND slot >= ? AND slot < ?"
         rows = db.execute(
-            "SELECT slot, origin, sum(notifications), sum(with_buttons), sum(answered), sum(bursts) "
-            f"FROM notification_counts WHERE {view} AND ({within}) GROUP BY slot, origin",
-            [*users, *(bound for span in ranges for bound in span)],
+            f"SELECT slot, origin, sum(notifications), sum(with_buttons), sum(answered) {within} GROUP BY slot, origin",
+            [*users, *current],
         ).fetchall()
-        oldest = db.execute(f"SELECT min(slot) FROM notification_counts WHERE {view}", users).fetchone()[0]
-        kept = db.execute("SELECT min(time) FROM notifications").fetchone()[0]
-        return rows, oldest, kept
-
-    def _stored_names(self, keys: list[str]) -> dict[str, str]:
-        rows = self._db().execute(
-            "SELECT origin_key, json_extract(origin, '$.name'), max(time) FROM notifications "
-            f"WHERE origin_key IN ({', '.join('?' * len(keys))}) GROUP BY origin_key",
-            keys,
+        previous = dict(db.execute(f"SELECT origin, sum(notifications) {within} GROUP BY origin", [*users, *compared]))
+        keys = sorted({row[1] for row in rows} | previous.keys())
+        return CountedRows(
+            rows=rows,
+            previous=previous,
+            oldest=db.execute(f"SELECT min(slot) FROM notification_counts WHERE {view}", users).fetchone()[0],
+            counting_since=db.execute("SELECT min(slot) FROM notification_counts").fetchone()[0],
+            kept_since=db.execute("SELECT min(time) FROM notifications").fetchone()[0],
+            names=self._stored_names("SELECT value AS key FROM json_each(?)", [json.dumps(keys)]),
         )
-        return {key: name for key, name, _ in rows if name}
 
     def _purge(self, cutoff: float, max_entries: int, counts_cutoff: float) -> int:
         db = self._db()
@@ -771,7 +735,6 @@ class NotificationStore:
             status_by,
             answers,
             _origin_key,
-            _burst,
         ) = row
         return NotificationRecord(
             id=record_id,

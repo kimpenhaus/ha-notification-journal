@@ -200,29 +200,27 @@ async def ws_statistics(hass: HomeAssistant, connection: websocket_api.ActiveCon
     store, user_id = scope
     zone = await _time_zone(msg.get("time_zone"))
     current = period(msg["period"], msg["offset"], msg["first_weekday"], dt_util.now(zone))
-    ranges = [
-        (current.compare_start.timestamp(), current.compare_end.timestamp()),
+    counted = await store.async_statistics(
+        user_id,
         (current.start.timestamp(), current.end.timestamp()),
-    ]
-    rows, oldest, kept = await store.async_statistics(user_id, ranges)
-    result = summarize(rows, current, zone)
+        (current.compare_start.timestamp(), current.compare_end.timestamp()),
+    )
+    result = await hass.async_add_executor_job(summarize, counted.rows, counted.previous, current, zone)
     names = OriginNames(hass)
     for origin in result["origins"]:
-        origin["name"] = names.name(origin["key"], None)
-    missing = [o["key"] for o in result["origins"] if o["name"] is None and "." in o["key"]]
-    if missing:
-        stored = await store.async_stored_names(missing)
-        for origin in result["origins"]:
-            origin["name"] = origin["name"] or stored.get(origin["key"])
+        origin["name"] = names.name(origin["key"], counted.names.get(origin["key"]))
     connection.send_result(
         msg["id"],
         {
             "period": current.kind,
             "start": current.start.isoformat(),
             "end": current.end.isoformat(),
-            "has_older": oldest is not None and oldest < current.start.timestamp(),
-            "comparable": oldest is not None and oldest <= current.compare_start.timestamp(),
-            "kept_since": None if kept is None else dt_util.utc_from_timestamp(kept).isoformat(),
+            "has_older": counted.oldest is not None and counted.oldest < current.start.timestamp(),
+            "comparable": counted.counting_since is not None
+            and counted.counting_since <= current.compare_start.timestamp(),
+            "kept_since": None
+            if counted.kept_since is None
+            else dt_util.utc_from_timestamp(counted.kept_since).isoformat(),
             **result,
         },
     )

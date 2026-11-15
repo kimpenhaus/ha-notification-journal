@@ -82,22 +82,17 @@ export interface Filters {
   text: string;
   status: Status | "";
   origin: string;
-  /** The name of `origin` when it came from the statistics and the filter may not offer it. */
-  originName?: string;
-  period: Period;
-  /** The span of `period` "range", opened from the statistics. */
-  range?: TimeRange;
+  /** A time back from now, or a fixed span opened from the statistics. */
+  period: Period | TimeRange;
   newestFirst: boolean;
 }
 
-export type Period = "" | "day" | "week" | "month" | "quarter" | "range";
+export type Period = "" | "day" | "week" | "month" | "quarter";
 
 export interface TimeRange {
   since: string;
   until: string;
   label: string;
-  /** When the oldest single notification still kept was sent; null when none are. */
-  keptSince: string | null;
 }
 
 export type StatisticsPeriod = "day" | "week" | "month" | "year";
@@ -121,16 +116,19 @@ export interface Statistics {
   /** Whether the counts reach back to the start of the period compared with. */
   comparable: boolean;
   kept_since: string | null;
-  totals: { notifications: number; with_buttons: number; answered: number; bursts: number; night: number };
-  previous: { notifications: number };
+  /** The sums over the origins, `previous` for the part of the period before compared with. */
+  totals: Omit<OriginStatistics, "key" | "name">;
   buckets: { start: string; counts: Record<string, number> }[];
   /** Notifications per weekday (Monday first) and hour. */
   heatmap: number[][];
   origins: OriginStatistics[];
 }
 
-export interface StatisticsSelection extends TimeRange {
+export interface StatisticsSelection {
+  range: TimeRange;
   origin?: { key: string; name: string };
+  /** When the oldest single notification still kept was sent; null when none are. */
+  keptSince: string | null;
 }
 
 export interface HassEntityState {

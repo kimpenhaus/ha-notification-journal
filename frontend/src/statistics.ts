@@ -1,20 +1,14 @@
 import { css, html, LitElement, nothing, svg, type PropertyValues, type TemplateResult } from "lit";
 
-import { type Clock, formatter } from "./format";
+import { type Clock, dayKey, formatter, numberFormatter, percentText } from "./format";
 import { icon, mdiChevronLeft, mdiChevronRight, mdiFlashOutline } from "./icons";
-import type { Localize } from "./localize";
-import { originGlyph } from "./record";
-import type {
-  HomeAssistant,
-  Origin,
-  OriginKind,
-  OriginStatistics,
-  Statistics,
-  StatisticsPeriod,
-  StatisticsSelection,
-} from "./types";
+import { countText, type Localize } from "./localize";
+import { originGlyph, originName, originOfKey } from "./record";
+import { controlStyles, surface } from "./styles";
+import type { HomeAssistant, OriginStatistics, Statistics, StatisticsPeriod, StatisticsSelection } from "./types";
+import { errorMessage, store, stored } from "./util";
 
-const PERIODS: StatisticsPeriod[] = ["day", "week", "month", "year"];
+const PERIODS = ["day", "week", "month", "year"] as const satisfies readonly StatisticsPeriod[];
 const PERIOD_KEY = "notification_journal.statistics_period";
 const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 /** Origins beyond this many share the colour of "other". */
@@ -49,30 +43,6 @@ function firstWeekday(hass: HomeAssistant): number {
   return first;
 }
 
-function originOf(key: string): Origin {
-  const domain = key.slice(0, key.indexOf("."));
-  const kind: OriginKind =
-    domain === "automation" || domain === "script" || domain === "integration" ? domain : (key as OriginKind);
-  return {
-    kind,
-    entity_id: kind === "automation" || kind === "script" ? key : null,
-    name: null,
-    trace_key: null,
-    run_id: null,
-    user_id: null,
-    integration: kind === "integration" ? key.slice(domain.length + 1) : null,
-  };
-}
-
-/** The name of an origin by its key; Home Assistant, a user by hand and an unknown origin have none of their own. */
-export function originName(localize: Localize, key: string, name: string | null): string {
-  if (name) return name;
-  if (key === "user") return localize("origin_by_hand");
-  if (key === "system") return localize("origin_system");
-  if (key === "unknown") return localize("origin_unknown");
-  return key;
-}
-
 function colour(slot: number): string {
   return slot ? `var(--graph-color-${slot}, var(--color-${slot}))` : "var(--disabled-text-color)";
 }
@@ -92,6 +62,45 @@ function isoWeek(year: number, month: number, day: number): number {
   return 1 + Math.round(((date.getTime() - first.getTime()) / 86_400_000 - 3 + ((first.getUTCDay() + 6) % 7)) / 7);
 }
 
+interface Column {
+  start: string;
+  until: string;
+  segments: { slot: number; key: string; count: number }[];
+  total: number;
+  future: boolean;
+}
+
+/** What the view draws from one answer of the server, worked out once per answer rather than on every hover. */
+interface Shape {
+  data: Statistics;
+  slots: Map<string, number>;
+  origins: Map<string, OriginStatistics>;
+  columns: Column[];
+}
+
+function shape(data: Statistics): Shape {
+  const slots = new Map(data.origins.slice(0, COLOURED).map((origin, index) => [origin.key, index + 1]));
+  const now = Date.now();
+  const columns = data.buckets.map((bucket, index): Column => {
+    const stacks = new Map<number, { key: string; count: number }>();
+    for (const [key, count] of Object.entries(bucket.counts)) {
+      const slot = slots.get(key) ?? 0;
+      stacks.set(slot, { key: slot ? key : OTHER, count: (stacks.get(slot)?.count ?? 0) + count });
+    }
+    const segments = [...stacks.entries()]
+      .sort(([left], [right]) => (left || COLOURED + 1) - (right || COLOURED + 1))
+      .map(([slot, stack]) => ({ slot, ...stack }));
+    return {
+      start: bucket.start,
+      until: data.buckets[index + 1]?.start ?? data.end,
+      segments,
+      total: segments.reduce((sum, segment) => sum + segment.count, 0),
+      future: Date.parse(bucket.start) > now,
+    };
+  });
+  return { data, slots, origins: new Map(data.origins.map((origin) => [origin.key, origin])), columns };
+}
+
 export class NotificationJournalStatistics extends LitElement {
   static override properties = {
     hass: { attribute: false },
@@ -100,7 +109,7 @@ export class NotificationJournalStatistics extends LitElement {
     originIcons: { attribute: false },
     _period: { state: true },
     _offset: { state: true },
-    _data: { state: true },
+    _shape: { state: true },
     _error: { state: true },
     _loading: { state: true },
     _width: { state: true },
@@ -113,7 +122,7 @@ export class NotificationJournalStatistics extends LitElement {
   declare originIcons: Map<string, string>;
   declare _period: StatisticsPeriod;
   declare _offset: number;
-  declare _data: Statistics | undefined;
+  declare _shape: Shape | undefined;
   declare _error: string | undefined;
   declare _loading: boolean;
   declare _width: number;
@@ -125,21 +134,11 @@ export class NotificationJournalStatistics extends LitElement {
 
   constructor() {
     super();
-    let period: string | null = null;
-    try {
-      period = window.localStorage.getItem(PERIOD_KEY);
-    } catch {
-      // Without storage the statistics open on a week.
-    }
-    this._period = PERIODS.includes(period as StatisticsPeriod) ? (period as StatisticsPeriod) : "week";
+    const period = stored(PERIOD_KEY);
+    this._period = PERIODS.find((known) => known === period) ?? "week";
     this._offset = 0;
     this._loading = false;
     this._width = 0;
-  }
-
-  /** The panel's styles apply: the view lives in its shadow root. */
-  protected override createRenderRoot(): HTMLElement {
-    return this;
   }
 
   override connectedCallback(): void {
@@ -156,7 +155,7 @@ export class NotificationJournalStatistics extends LitElement {
 
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
-    const chart = this.querySelector(".chart");
+    const chart = this.renderRoot.querySelector(".chart");
     if (!chart || chart === this._observed) return;
     this._resize ??= new ResizeObserver(([entry]) => {
       const width = Math.round(entry.contentRect.width);
@@ -181,35 +180,28 @@ export class NotificationJournalStatistics extends LitElement {
         time_zone: this.clock.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
       if (request !== this._request) return;
-      this._data = data;
+      this._shape = shape(data);
       this._error = undefined;
     } catch (error) {
       if (request !== this._request) return;
-      const message = typeof error === "object" && error && "message" in error ? String(error.message) : String(error);
-      this._error = this.localize("stats_failed", { message });
+      this._error = this.localize("stats_failed", { message: errorMessage(error) });
     } finally {
       if (request === this._request) this._loading = false;
     }
   }
 
   private _show(period: StatisticsPeriod, offset: number): void {
-    if (period !== this._period) {
-      try {
-        window.localStorage.setItem(PERIOD_KEY, period);
-      } catch {
-        // The choice lasts until the page reloads.
-      }
-    }
+    if (period !== this._period) store(PERIOD_KEY, period);
     this._period = period;
     this._offset = offset;
     this._hover = undefined;
     void this.refresh();
   }
 
-  private _select(selection: Omit<StatisticsSelection, "keptSince">): void {
+  private _select(range: StatisticsSelection["range"], origin?: StatisticsSelection["origin"]): void {
     this.dispatchEvent(
       new CustomEvent<StatisticsSelection>("statistics-select", {
-        detail: { ...selection, keptSince: this._data?.kept_since ?? null },
+        detail: { range, origin, keptSince: this._shape?.data.kept_since ?? null },
         bubbles: true,
         composed: true,
       }),
@@ -220,18 +212,22 @@ export class NotificationJournalStatistics extends LitElement {
     return formatter(this.clock.language, { ...options, timeZone: this.clock.timeZone }).format(new Date(iso));
   }
 
+  private _number(value: number): string {
+    return numberFormatter(this.clock.language).format(value);
+  }
+
   private _rangeLabel(data: Statistics): string {
-    const start = new Date(data.start);
-    const last = new Date(new Date(data.end).getTime() - 1);
-    const zone = this.clock.timeZone;
-    const language = this.clock.language;
     switch (data.period) {
       case "day":
         return this._format(data.start, { weekday: "short", day: "numeric", month: "long", year: "numeric" });
       case "week": {
-        const range = formatter(language, { day: "numeric", month: "short", timeZone: zone }).formatRange(start, last);
+        const range = formatter(this.clock.language, {
+          day: "numeric",
+          month: "short",
+          timeZone: this.clock.timeZone,
+        }).formatRange(new Date(data.start), new Date(Date.parse(data.end) - 1));
         if (firstWeekday(this.hass) !== 0) return range;
-        const [year, month, day] = formatter("en-CA", { timeZone: zone }).format(start).split("-").map(Number);
+        const [year, month, day] = dayKey(this.clock, data.start).split("-").map(Number);
         return `${this.localize("week_number", { week: isoWeek(year, month, day) })} · ${range}`;
       }
       case "month":
@@ -249,19 +245,29 @@ export class NotificationJournalStatistics extends LitElement {
   }
 
   private _bucketTitle(period: StatisticsPeriod, iso: string): string {
-    if (period === "day")
+    if (period === "day") {
       return this._format(iso, { weekday: "short", day: "numeric", month: "short", hour: "numeric" });
+    }
     if (period === "year") return this._format(iso, { month: "long", year: "numeric" });
     return this._format(iso, { weekday: "long", day: "numeric", month: "long" });
   }
 
-  private _name(origin: OriginStatistics | undefined, key: string): string {
-    return key === OTHER ? this.localize("other_origins") : originName(this.localize, key, origin?.name ?? null);
+  private _name(key: string): string {
+    if (key === OTHER) return this.localize("other_origins");
+    return originName(this.localize, key, this._shape?.origins.get(key)?.name ?? null);
+  }
+
+  private _change(comparable: boolean, current: number, previous: number): string {
+    if (!comparable) return "–";
+    if (!previous) return current ? this.localize("trend_new") : "±0";
+    const change = Math.round((100 * (current - previous)) / previous);
+    if (change === 0) return "±0 %";
+    return `${change > 0 ? "↑ +" : "↓ −"}${this._number(Math.abs(change))} %`;
   }
 
   override render(): TemplateResult {
     const localize = this.localize;
-    const data = this._data;
+    const data = this._shape?.data;
     return html`
       <div class="stats-controls">
         <div class="view" role="group" aria-label=${localize("stats_period")}>
@@ -285,7 +291,7 @@ export class NotificationJournalStatistics extends LitElement {
           >
             ${icon(mdiChevronLeft, localize("earlier"))}
           </button>
-          <span class="stats-range">${data && data.period === this._period ? this._rangeLabel(data) : ""}</span>
+          <span class="stats-range">${data?.period === this._period ? this._rangeLabel(data) : ""}</span>
           <button
             class="icon-button small"
             title=${localize("later")}
@@ -299,26 +305,23 @@ export class NotificationJournalStatistics extends LitElement {
       ${
         this._error
           ? html`<div class="empty"><p>${this._error}</p></div>`
-          : data
-            ? html`<div class="stats ${this._loading ? "busy" : ""}">${this._content(data)}</div>`
+          : this._shape
+            ? html`<div class="stats ${this._loading ? "busy" : ""}">${this._content(this._shape)}</div>`
             : html`<div class="empty"><p>${localize("loading")}</p></div>`
       }
     `;
   }
 
-  private _content(data: Statistics): TemplateResult {
+  private _content(shape: Shape): TemplateResult {
     const localize = this.localize;
-    const slots = new Map<string, number>();
-    data.origins.slice(0, COLOURED).forEach((origin, index) => slots.set(origin.key, index + 1));
-    const byKey = new Map(data.origins.map((origin) => [origin.key, origin]));
     return html`
-      ${this._tiles(data, byKey)}
+      ${this._tiles(shape.data)}
       <section class="stats-box">
         <div class="stats-head">
           <h2>${localize("history")}</h2>
           <span>${localize("history_hint")}</span>
         </div>
-        ${this._legend(data, slots, byKey)} ${this._chart(data, slots, byKey)}
+        ${this._legend(shape)} ${this._chart(shape)}
       </section>
       <div class="stats-columns">
         <section class="stats-box">
@@ -326,38 +329,33 @@ export class NotificationJournalStatistics extends LitElement {
             <h2>${localize("when")}</h2>
             <span>${localize("when_hint")}</span>
           </div>
-          ${this._heatmap(data)}
+          ${this._heatmap(shape.data)}
         </section>
         <section class="stats-box">
           <div class="stats-head">
             <h2>${localize("who")}</h2>
             <span>${localize("who_hint")}</span>
           </div>
-          ${this._ranking(data, slots)}
+          ${this._ranking(shape)}
         </section>
       </div>
     `;
   }
 
-  private _change(current: number, previous: number): string {
-    if (!this._data?.comparable) return "–";
-    if (!previous) return current ? this.localize("trend_new") : "±0";
-    const change = Math.round((100 * (current - previous)) / previous);
-    if (change === 0) return "±0 %";
-    return `${change > 0 ? "↑ +" : "↓ −"}${new Intl.NumberFormat(this.clock.language).format(Math.abs(change))} %`;
+  /** The name of the origin with the most of a field, if any has some. */
+  private _top(data: Statistics, field: "night" | "bursts"): string | undefined {
+    const top = data.origins.reduce<OriginStatistics | undefined>(
+      (best, origin) => (origin[field] > (best?.[field] ?? 0) ? origin : best),
+      undefined,
+    );
+    return top && this._name(top.key);
   }
 
-  private _top(data: Statistics, field: "night" | "bursts", byKey: Map<string, OriginStatistics>): string | undefined {
-    const top = [...data.origins].sort((left, right) => right[field] - left[field])[0];
-    return top && top[field] ? this._name(byKey.get(top.key), top.key) : undefined;
-  }
-
-  private _tiles(data: Statistics, byKey: Map<string, OriginStatistics>): TemplateResult {
+  private _tiles(data: Statistics): TemplateResult {
     const localize = this.localize;
-    const number = new Intl.NumberFormat(this.clock.language);
     const totals = data.totals;
-    const night = this._top(data, "night", byKey);
-    const bursts = this._top(data, "bursts", byKey);
+    const night = this._top(data, "night");
+    const bursts = this._top(data, "bursts");
     const tile = (label: string, value: string, note: string, title?: string) =>
       html`<div class="stats-tile" title=${title ?? nothing}>
         <span class="tile-label">${label}</span>
@@ -367,88 +365,67 @@ export class NotificationJournalStatistics extends LitElement {
     return html`<div class="stats-tiles">
       ${tile(
         localize("tile_notifications"),
-        number.format(totals.notifications),
+        this._number(totals.notifications),
         data.comparable
-          ? localize(`compare_${data.period}`, {
-              change: this._change(totals.notifications, data.previous.notifications),
-            })
+          ? localize(`compare_${data.period}`, { change: this._change(true, totals.notifications, totals.previous) })
           : localize("no_comparison"),
       )}
       ${tile(
         localize("tile_answered"),
-        totals.with_buttons ? `${number.format(Math.round((100 * totals.answered) / totals.with_buttons))} %` : "–",
+        percentText(this.clock.language, totals.answered, totals.with_buttons),
         totals.with_buttons
           ? localize("answered_of", {
-              answered: number.format(totals.answered),
-              total: number.format(totals.with_buttons),
+              answered: this._number(totals.answered),
+              total: this._number(totals.with_buttons),
             })
           : localize("no_buttons"),
       )}
       ${tile(
         localize("tile_night"),
-        number.format(totals.night),
+        this._number(totals.night),
         night ? localize("mostly", { name: night }) : localize("quiet"),
       )}
       ${tile(
         localize("tile_bursts"),
-        number.format(totals.bursts),
+        this._number(totals.bursts),
         bursts ? localize("mostly", { name: bursts }) : localize("bursts_hint"),
         localize("bursts_hint"),
       )}
     </div>`;
   }
 
-  private _legend(data: Statistics, slots: Map<string, number>, byKey: Map<string, OriginStatistics>): TemplateResult {
+  private _legend({ data, slots }: Shape): TemplateResult {
     if (!data.totals.notifications) return html`<p class="stats-empty">${this.localize("no_statistics")}</p>`;
-    const shown = data.origins.filter((origin) => origin.notifications && slots.has(origin.key));
-    const other = data.origins.some((origin) => origin.notifications && !slots.has(origin.key));
+    const sent = data.origins.filter((origin) => origin.notifications);
+    const other = sent.some((origin) => !slots.has(origin.key));
     return html`<div class="legend">
-      ${shown.map(
-        (origin) =>
-          html`<span
-            ><i class="swatch" style="background:${colour(slots.get(origin.key)!)}"></i>${this._name(
-              byKey.get(origin.key),
-              origin.key,
-            )}</span
-          >`,
-      )}
-      ${other ? html`<span><i class="swatch" style="background:${colour(0)}"></i>${this.localize("other_origins")}</span>` : nothing}
+      ${sent
+        .filter((origin) => slots.has(origin.key))
+        .map(
+          (origin) =>
+            html`<span
+              ><i class="swatch" style="background:${colour(slots.get(origin.key)!)}"></i
+              >${this._name(origin.key)}</span
+            >`,
+        )}
+      ${other ? html`<span><i class="swatch" style="background:${colour(0)}"></i>${this._name(OTHER)}</span>` : nothing}
     </div>`;
   }
 
-  private _chart(data: Statistics, slots: Map<string, number>, byKey: Map<string, OriginStatistics>): TemplateResult {
+  private _chart({ data, columns }: Shape): TemplateResult {
     const width = Math.max(this._width, 280);
-    const now = Date.now();
-    const columns = data.buckets.map((bucket, index) => {
-      const stacks = new Map<number, { key: string; count: number }>();
-      for (const [key, count] of Object.entries(bucket.counts)) {
-        const slot = slots.get(key) ?? 0;
-        const stack = stacks.get(slot);
-        stacks.set(slot, { key: slot ? key : OTHER, count: (stack?.count ?? 0) + count });
-      }
-      const segments = [...stacks.entries()]
-        .sort(([left], [right]) => (left || COLOURED + 1) - (right || COLOURED + 1))
-        .map(([slot, stack]) => ({ slot, ...stack }));
-      const until = data.buckets[index + 1]?.start ?? data.end;
-      return {
-        start: bucket.start,
-        until,
-        segments,
-        total: segments.reduce((sum, segment) => sum + segment.count, 0),
-        future: new Date(bucket.start).getTime() > now,
-      };
-    });
     const max = Math.max(0, ...columns.map((column) => column.total));
     const step = niceStep(max);
     const top = Math.max(step, Math.ceil(max / step) * step);
-    const plotWidth = width - AXIS_WIDTH;
     const plotHeight = CHART_HEIGHT - LABEL_HEIGHT - 8;
-    const columnWidth = plotWidth / columns.length;
+    const columnWidth = (width - AXIS_WIDTH) / columns.length;
     const barWidth = Math.max(3, Math.min(40, columnWidth * 0.62));
     const y = (value: number) => 8 + plotHeight - (value / top) * plotHeight;
     const ticks: number[] = [];
     for (let value = 0; value <= top; value += step) ticks.push(value);
-    const hovered = this._hover !== undefined ? columns[this._hover] : undefined;
+    const hover = this._hover;
+    const hovered = hover !== undefined ? columns[hover] : undefined;
+    const left = hover !== undefined && hover > columns.length / 2;
     return html`<div class="chart" @pointerleave=${() => (this._hover = undefined)}>
       <svg
         viewBox="0 0 ${width} ${CHART_HEIGHT}"
@@ -499,8 +476,8 @@ export class NotificationJournalStatistics extends LitElement {
       ${
         hovered
           ? html`<div
-              class="chart-tip ${this._hover! > columns.length / 2 ? "left" : ""}"
-              style="--x:${AXIS_WIDTH + columnWidth * (this._hover! + (this._hover! > columns.length / 2 ? 0 : 1))}px"
+              class="chart-tip ${left ? "left" : ""}"
+              style="--x:${AXIS_WIDTH + columnWidth * (hover! + (left ? 0 : 1))}px"
             >
               <span class="chart-tip-head"
                 >${this._bucketTitle(data.period, hovered.start)}<b>${hovered.total}</b></span
@@ -510,10 +487,9 @@ export class NotificationJournalStatistics extends LitElement {
                 .map(
                   (segment) =>
                     html`<span
-                      ><i class="swatch" style="background:${colour(segment.slot)}"></i>${this._name(
-                        byKey.get(segment.key),
-                        segment.key,
-                      )}<b>${segment.count}</b></span
+                      ><i class="swatch" style="background:${colour(segment.slot)}"></i>${this._name(segment.key)}<b
+                        >${segment.count}</b
+                      ></span
                     >`,
                 )}
             </div>`
@@ -527,11 +503,11 @@ export class NotificationJournalStatistics extends LitElement {
     const rows = Array.from({ length: 7 }, (_, index) => (first + index) % 7);
     const max = Math.max(1, ...data.heatmap.flat());
     const level = (count: number) => (count ? Math.min(HEAT_LEVELS, Math.ceil((count / max) * HEAT_LEVELS)) : 0);
-    const reference = new Date(Date.UTC(2024, 0, 1));
+    const reference = Date.UTC(2024, 0, 1);
     const weekday = formatter(this.clock.language, { weekday: "short", timeZone: "UTC" });
     const hourFormat = formatter(this.clock.language, { hour: "numeric", timeZone: "UTC" });
-    const dayName = (day: number) => weekday.format(new Date(reference.getTime() + day * 86_400_000));
-    const hourName = (hour: number) => hourFormat.format(new Date(reference.getTime() + hour * 3_600_000));
+    const dayName = (day: number) => weekday.format(new Date(reference + day * 86_400_000));
+    const hourName = (hour: number) => hourFormat.format(new Date(reference + hour * 3_600_000));
     return html`<div class="heatmap" role="table">
         <span></span>
         ${Array.from({ length: 24 }, (_, hour) => html`<span class="heat-hour">${hour % 6 === 0 ? hourName(hour) : ""}</span>`)}
@@ -553,11 +529,10 @@ export class NotificationJournalStatistics extends LitElement {
       </div>`;
   }
 
-  private _ranking(data: Statistics, slots: Map<string, number>): TemplateResult {
+  private _ranking({ data, slots }: Shape): TemplateResult {
     const origins = data.origins.filter((origin) => origin.notifications);
     if (!origins.length) return html`<p class="stats-empty">${this.localize("no_statistics")}</p>`;
     const localize = this.localize;
-    const number = new Intl.NumberFormat(this.clock.language);
     const max = origins[0].notifications;
     const label = this._rangeLabel(data);
     return html`<div class="ranking-scroll">
@@ -572,9 +547,9 @@ export class NotificationJournalStatistics extends LitElement {
         </thead>
         <tbody>
           ${origins.map((origin) => {
-            const name = this._name(origin, origin.key);
-            const select = () =>
-              this._select({ origin: { key: origin.key, name }, since: data.start, until: data.end, label });
+            const name = this._name(origin.key);
+            const shade = colour(slots.get(origin.key) ?? 0);
+            const select = () => this._select({ since: data.start, until: data.end, label }, { key: origin.key, name });
             return html`<tr
               tabindex="0"
               @click=${select}
@@ -582,360 +557,343 @@ export class NotificationJournalStatistics extends LitElement {
             >
               <td>
                 <span class="ranking-name">
-                  <i class="swatch" style="background:${colour(slots.get(origin.key) ?? 0)}"></i>
-                  <span class="ranking-glyph">${originGlyph(originOf(origin.key), this.originIcons)}</span>
+                  <i class="swatch" style="background:${shade}"></i>
+                  <span class="ranking-glyph">${originGlyph(originOfKey(origin.key), this.originIcons)}</span>
                   <span>${name}</span>
                 </span>
                 <span class="ranking-bar"
-                  ><i
-                    style="width:${(100 * origin.notifications) / max}%;background:${colour(slots.get(origin.key) ?? 0)}"
-                  ></i
+                  ><i style="width:${(100 * origin.notifications) / max}%;background:${shade}"></i
                 ></span>
                 ${
                   origin.bursts
                     ? html`<span class="ranking-bursts" title=${localize("bursts_hint")}
-                        >${icon(mdiFlashOutline)}${
-                          origin.bursts === 1
-                            ? localize("bursts_one")
-                            : localize("bursts_many", { count: number.format(origin.bursts) })
-                        }</span
+                        >${icon(mdiFlashOutline)}${countText(localize, origin.bursts, "bursts_one", "bursts_many")}</span
                       >`
                     : nothing
                 }
               </td>
-              <td class="number">${number.format(origin.notifications)}</td>
-              <td class="number">${this._change(origin.notifications, origin.previous)}</td>
-              <td class="number">
-                ${origin.with_buttons ? `${number.format(Math.round((100 * origin.answered) / origin.with_buttons))} %` : "–"}
-              </td>
+              <td class="number">${this._number(origin.notifications)}</td>
+              <td class="number">${this._change(data.comparable, origin.notifications, origin.previous)}</td>
+              <td class="number">${percentText(this.clock.language, origin.answered, origin.with_buttons)}</td>
             </tr>`;
           })}
         </tbody>
       </table>
     </div>`;
   }
-}
 
-export const statisticsStyles = css`
-  notification-journal-statistics {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .stats-controls {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 16px;
-  }
-  .stats-nav {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-  }
-  .stats-nav .icon-button[disabled] {
-    opacity: 0.35;
-    cursor: default;
-    background: none;
-  }
-  .stats-range {
-    min-width: 14ch;
-    text-align: center;
-    font-size: 0.875rem;
-    font-variant-numeric: tabular-nums;
-  }
-  .stats {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .stats.busy {
-    opacity: 0.6;
-    transition: opacity 0.2s 0.15s;
-  }
-  .stats-tiles {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
-    gap: 10px;
-  }
-  .stats-tile,
-  .stats-box {
-    background: var(--card-background-color);
-    border-radius: var(--ha-card-border-radius, 12px);
-    border: var(--ha-card-border-width, 1px) solid var(--ha-card-border-color, var(--divider-color));
-    box-shadow: var(--ha-card-box-shadow, none);
-    min-width: 0;
-  }
-  .stats-tile {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 12px 14px;
-  }
-  .tile-label,
-  .tile-note {
-    color: var(--secondary-text-color);
-    font-size: 0.8rem;
-  }
-  .tile-value {
-    font-size: 1.6rem;
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
-  }
-  .stats-box {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 14px 16px;
-  }
-  .stats-head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 4px 12px;
-  }
-  .stats-head h2 {
-    margin: 0;
-    font-size: 1rem;
-    font-weight: 500;
-  }
-  .stats-head span,
-  .stats-empty {
-    color: var(--secondary-text-color);
-    font-size: 0.8rem;
-  }
-  .stats-empty {
-    margin: 0;
-    padding: 12px 0;
-    text-align: center;
-  }
-  .stats-columns {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
-    gap: 12px;
-    align-items: start;
-  }
-  .legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 14px;
-    color: var(--secondary-text-color);
-    font-size: 0.8rem;
-  }
-  .legend span {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .swatch {
-    flex: none;
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: 3px;
-  }
-  .chart {
-    position: relative;
-    width: 100%;
-  }
-  .chart svg {
-    display: block;
-    width: 100%;
-    height: auto;
-  }
-  .chart .grid {
-    stroke: var(--divider-color);
-  }
-  .chart .baseline {
-    stroke: var(--secondary-text-color);
-    stroke-opacity: 0.5;
-  }
-  .chart .axis {
-    fill: var(--secondary-text-color);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-  }
-  .chart .future {
-    fill-opacity: 0.45;
-  }
-  .chart .hit {
-    fill: transparent;
-    cursor: pointer;
-  }
-  .chart .hit:hover {
-    fill: color-mix(in srgb, var(--primary-text-color) 7%, transparent);
-  }
-  .chart-tip {
-    position: absolute;
-    top: 0;
-    left: var(--x);
-    z-index: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    min-width: 160px;
-    max-width: 300px;
-    margin-left: 8px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    border: 1px solid var(--divider-color);
-    background: var(--card-background-color);
-    box-shadow: var(--ha-card-box-shadow, none);
-    font-size: 0.8rem;
-    pointer-events: none;
-  }
-  .chart-tip.left {
-    transform: translateX(-100%);
-    margin-left: -8px;
-  }
-  .chart-tip span {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .chart-tip-head {
-    font-weight: 500;
-  }
-  .chart-tip b {
-    margin-left: auto;
-    padding-left: 10px;
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
-  }
-  .heatmap {
-    display: grid;
-    grid-template-columns: auto repeat(24, minmax(0, 1fr));
-    gap: 2px;
-    color: var(--secondary-text-color);
-    font-size: 0.7rem;
-    font-variant-numeric: tabular-nums;
-  }
-  .heat-day {
-    align-self: center;
-    padding-right: 6px;
-  }
-  .heat-hour {
-    white-space: nowrap;
-  }
-  .heat-cell {
-    aspect-ratio: 1;
-    border-radius: 3px;
-    background: color-mix(in srgb, var(--primary-color) var(--level), var(--card-background-color));
-  }
-  .heat-cell.level-0 {
-    background: color-mix(in srgb, var(--primary-text-color) 6%, var(--card-background-color));
-  }
-  .level-1 {
-    --level: 20%;
-  }
-  .level-2 {
-    --level: 40%;
-  }
-  .level-3 {
-    --level: 60%;
-  }
-  .level-4 {
-    --level: 80%;
-  }
-  .level-5 {
-    --level: 100%;
-  }
-  .heat-scale {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 4px;
-    color: var(--secondary-text-color);
-    font-size: 0.75rem;
-  }
-  .heat-scale .heat-cell {
-    width: 12px;
-  }
-  .ranking-scroll {
-    overflow-x: auto;
-  }
-  .ranking {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.875rem;
-  }
-  .ranking th {
-    padding: 0 6px 6px;
-    border-bottom: 1px solid var(--divider-color);
-    color: var(--secondary-text-color);
-    font-size: 0.75rem;
-    font-weight: 400;
-    text-align: left;
-    white-space: nowrap;
-  }
-  .ranking td {
-    padding: 8px 6px;
-    border-bottom: 1px solid var(--divider-color);
-    vertical-align: top;
-  }
-  .ranking tr:last-child td {
-    border-bottom: none;
-  }
-  .ranking tbody tr {
-    cursor: pointer;
-  }
-  .ranking tbody tr:hover td,
-  .ranking tbody tr:focus-visible td {
-    background: color-mix(in srgb, var(--primary-text-color) 5%, transparent);
-  }
-  .ranking tbody tr:focus-visible {
-    outline: 2px solid var(--primary-color);
-    outline-offset: -2px;
-  }
-  .ranking .number {
-    text-align: right;
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-  }
-  .ranking-name {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-  }
-  .ranking-glyph {
-    display: inline-flex;
-    color: var(--secondary-text-color);
-    --mdc-icon-size: 16px;
-  }
-  .ranking-glyph .icon {
-    width: 16px;
-    height: 16px;
-  }
-  .ranking-bar {
-    display: block;
-    height: 6px;
-    margin-top: 6px;
-    border-radius: 3px;
-    background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
-  }
-  .ranking-bar i {
-    display: block;
-    height: 100%;
-    border-radius: 3px;
-  }
-  .ranking-bursts {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin-top: 6px;
-    padding: 1px 8px;
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--warning-color) 18%, transparent);
-    font-size: 0.75rem;
-  }
-  .ranking-bursts .icon {
-    width: 13px;
-    height: 13px;
-    color: var(--warning-color);
-  }
-`;
+  static override styles = [
+    controlStyles,
+    css`
+      :host {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .stats-controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 16px;
+      }
+      .stats-nav {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+      }
+      .stats-range {
+        min-width: 14ch;
+        text-align: center;
+        font-size: 0.875rem;
+        font-variant-numeric: tabular-nums;
+      }
+      .stats {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .stats-tiles {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+        gap: 10px;
+      }
+      .stats-tile,
+      .stats-box {
+        ${surface}
+        min-width: 0;
+      }
+      .stats-tile {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 12px 14px;
+      }
+      .tile-label,
+      .tile-note {
+        color: var(--secondary-text-color);
+        font-size: 0.8rem;
+      }
+      .tile-value {
+        font-size: 1.6rem;
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+      }
+      .stats-box {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 14px 16px;
+      }
+      .stats-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 4px 12px;
+      }
+      .stats-head h2 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 500;
+      }
+      .stats-head span,
+      .stats-empty {
+        color: var(--secondary-text-color);
+        font-size: 0.8rem;
+      }
+      .stats-empty {
+        margin: 0;
+        padding: 12px 0;
+        text-align: center;
+      }
+      .stats-columns {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+        gap: 12px;
+        align-items: start;
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 14px;
+        color: var(--secondary-text-color);
+        font-size: 0.8rem;
+      }
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .swatch {
+        flex: none;
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 3px;
+      }
+      .chart {
+        position: relative;
+        width: 100%;
+      }
+      .chart svg {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      .chart .grid {
+        stroke: var(--divider-color);
+      }
+      .chart .baseline {
+        stroke: var(--secondary-text-color);
+        stroke-opacity: 0.5;
+      }
+      .chart .axis {
+        fill: var(--secondary-text-color);
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+      }
+      .chart .future {
+        fill-opacity: 0.45;
+      }
+      .chart .hit {
+        fill: transparent;
+        cursor: pointer;
+      }
+      .chart .hit:hover {
+        fill: color-mix(in srgb, var(--primary-text-color) 7%, transparent);
+      }
+      .chart-tip {
+        position: absolute;
+        top: 0;
+        left: var(--x);
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 160px;
+        max-width: 300px;
+        margin-left: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--divider-color);
+        background: var(--card-background-color);
+        box-shadow: var(--ha-card-box-shadow, none);
+        font-size: 0.8rem;
+        pointer-events: none;
+      }
+      .chart-tip.left {
+        transform: translateX(-100%);
+        margin-left: -8px;
+      }
+      .chart-tip span {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .chart-tip-head {
+        font-weight: 500;
+      }
+      .chart-tip b {
+        margin-left: auto;
+        padding-left: 10px;
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+      }
+      .heatmap {
+        display: grid;
+        grid-template-columns: auto repeat(24, minmax(0, 1fr));
+        gap: 2px;
+        color: var(--secondary-text-color);
+        font-size: 0.7rem;
+        font-variant-numeric: tabular-nums;
+      }
+      .heat-day {
+        align-self: center;
+        padding-right: 6px;
+      }
+      .heat-hour {
+        white-space: nowrap;
+      }
+      .heat-cell {
+        aspect-ratio: 1;
+        border-radius: 3px;
+        background: color-mix(in srgb, var(--primary-color) var(--level), var(--card-background-color));
+      }
+      .heat-cell.level-0 {
+        background: color-mix(in srgb, var(--primary-text-color) 6%, var(--card-background-color));
+      }
+      .level-1 {
+        --level: 20%;
+      }
+      .level-2 {
+        --level: 40%;
+      }
+      .level-3 {
+        --level: 60%;
+      }
+      .level-4 {
+        --level: 80%;
+      }
+      .level-5 {
+        --level: 100%;
+      }
+      .heat-scale {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 4px;
+        color: var(--secondary-text-color);
+        font-size: 0.75rem;
+      }
+      .heat-scale .heat-cell {
+        width: 12px;
+      }
+      .ranking-scroll {
+        overflow-x: auto;
+      }
+      .ranking {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.875rem;
+      }
+      .ranking th {
+        padding: 0 6px 6px;
+        border-bottom: 1px solid var(--divider-color);
+        color: var(--secondary-text-color);
+        font-size: 0.75rem;
+        font-weight: 400;
+        text-align: left;
+        white-space: nowrap;
+      }
+      .ranking td {
+        padding: 8px 6px;
+        border-bottom: 1px solid var(--divider-color);
+        vertical-align: top;
+      }
+      .ranking tr:last-child td {
+        border-bottom: none;
+      }
+      .ranking tbody tr {
+        cursor: pointer;
+      }
+      .ranking tbody tr:hover td,
+      .ranking tbody tr:focus-visible td {
+        background: color-mix(in srgb, var(--primary-text-color) 5%, transparent);
+      }
+      .ranking tbody tr:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: -2px;
+      }
+      .ranking .number {
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      .ranking-name {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+      .ranking-glyph {
+        display: inline-flex;
+        color: var(--secondary-text-color);
+        --mdc-icon-size: 16px;
+      }
+      .ranking-glyph .icon {
+        width: 16px;
+        height: 16px;
+      }
+      .ranking-bar {
+        display: block;
+        height: 6px;
+        margin-top: 6px;
+        border-radius: 3px;
+        background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
+      }
+      .ranking-bar i {
+        display: block;
+        height: 100%;
+        border-radius: 3px;
+      }
+      .ranking-bursts {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 6px;
+        padding: 1px 8px;
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--warning-color) 18%, transparent);
+        font-size: 0.75rem;
+      }
+      .ranking-bursts .icon {
+        width: 13px;
+        height: 13px;
+        color: var(--warning-color);
+      }
+    `,
+  ];
+}
 
 if (!customElements.get("notification-journal-statistics")) {
   customElements.define("notification-journal-statistics", NotificationJournalStatistics);
