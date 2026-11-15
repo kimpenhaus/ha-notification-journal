@@ -1,5 +1,7 @@
 """Tests of the versioned schema migrations."""
 
+import logging
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -11,6 +13,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.notification_journal.const import DATABASE_FILE, DEFAULT_OPTIONS, DOMAIN
 from custom_components.notification_journal.store import (
+    MIGRATION_COPY_DAYS,
     SCHEMA_VERSION,
     NewerSchemaError,
     NotificationStore,
@@ -148,3 +151,71 @@ async def test_migration_adds_missing_schema_objects(tmp_path: Path) -> None:
     finally:
         connection.close()
     assert {"notifications_delete", "notifications_time", "notification_users_user"} <= names
+
+
+def _copy(folder: Path, name: str, days_old: float) -> Path:
+    path = folder / name
+    path.write_bytes(b"copy")
+    stamp = time.time() - days_old * 86400
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+async def _open_and_close(path: Path) -> None:
+    store = NotificationStore(str(path))
+    await store.async_open()
+    await store.async_close()
+
+
+async def test_copies_of_earlier_migrations_are_removed(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    path = tmp_path / "journal.db"
+    await _open_and_close(path)
+    first = _copy(tmp_path, "journal.db.bak-v1", days_old=40)
+    second = _copy(tmp_path, "journal.db.bak-v2", days_old=20)
+    latest = _copy(tmp_path, "journal.db.bak-v10", days_old=1)
+
+    with caplog.at_level(logging.DEBUG):
+        await _open_and_close(path)
+
+    assert not first.exists()
+    assert not second.exists()
+    assert latest.exists()
+    assert f"Removed {first}" in caplog.text
+
+
+async def test_copy_of_the_latest_migration_is_removed_after_the_grace_period(tmp_path: Path) -> None:
+    path = tmp_path / "journal.db"
+    await _open_and_close(path)
+    young = _copy(tmp_path, "journal.db.bak-v3", days_old=MIGRATION_COPY_DAYS - 1)
+
+    await _open_and_close(path)
+    assert young.exists()
+
+    stamp = time.time() - (MIGRATION_COPY_DAYS + 1) * 86400
+    os.utime(young, (stamp, stamp))
+    await _open_and_close(path)
+    assert not young.exists()
+
+
+async def test_copy_made_by_a_migration_is_kept(tmp_path: Path) -> None:
+    path = tmp_path / "old.db"
+    _old_database(path, 1)
+    earlier = _copy(tmp_path, "old.db.bak-v0", days_old=1)
+
+    await _open_and_close(path)
+
+    assert _backups(tmp_path) == [tmp_path / "old.db.bak-v1"]
+    assert not earlier.exists()
+
+
+async def test_other_files_are_left_alone(tmp_path: Path) -> None:
+    path = tmp_path / "journal.db"
+    await _open_and_close(path)
+    others = [
+        _copy(tmp_path, name, days_old=100)
+        for name in ("other.db.bak-v1", "journal.db.bak-v1-journal", "journal.db.bak-vX", "journal.db.bak")
+    ]
+
+    await _open_and_close(path)
+
+    assert all(other.exists() for other in others)
