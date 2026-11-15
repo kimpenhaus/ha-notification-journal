@@ -28,8 +28,14 @@ Home Assistant forgets a notification the moment it is sent. Notification Journa
 
 Notification Journal needs Home Assistant 2026.11 or newer and is installed from the Marketplace:
 
+[![Open this repository in the Marketplace of your Home Assistant.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=kimpenhaus&repository=ha-notification-journal&category=integration)
+
 1. *Settings → Marketplace*, search for *Notification Journal*.
 2. *Install*: the setup opens right away, no restart needed.
+
+If you closed the setup, start it again under *Settings → Devices & services → Add integration → Notification Journal*:
+
+[![Add Notification Journal to your Home Assistant.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=notification_journal)
 
 The panel *Notification Journal* appears in the sidebar. Only notifications sent from now on are recorded.
 
