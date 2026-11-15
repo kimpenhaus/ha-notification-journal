@@ -37,11 +37,13 @@
             "name": "Retention",
             "data": {
               "retention_days": "Keep for",
-              "max_entries": "At most"
+              "max_entries": "At most",
+              "statistics_years": "Keep statistics for (years)"
             },
             "data_description": {
               "retention_days": "Older entries are deleted once a day.",
-              "max_entries": "When there are more, the oldest are deleted first."
+              "max_entries": "When there are more, the oldest are deleted first.",
+              "statistics_years": "Hourly counts behind the statistics, without any text; whole calendar years, at least two to compare a year with the one before, and never shorter than the notifications."
             }
           },
           "access": {

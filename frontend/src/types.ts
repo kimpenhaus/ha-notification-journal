@@ -64,8 +64,9 @@ export interface Page {
 export type View = "time" | "origin";
 
 export interface FacetOption {
+  /** The key of an origin: an automation or script, `integration.<domain>`, or a kind without a name. */
   id: string;
-  name: string;
+  name: string | null;
 }
 
 export interface Facets {
@@ -82,10 +83,51 @@ export interface Filters {
   status: Status | "";
   origin: string;
   period: Period;
+  /** The span of `period` "range", opened from the statistics. */
+  range?: TimeRange;
   newestFirst: boolean;
 }
 
-export type Period = "" | "day" | "week" | "month" | "quarter";
+export type Period = "" | "day" | "week" | "month" | "quarter" | "range";
+
+export interface TimeRange {
+  since: string;
+  until: string;
+  label: string;
+  /** When the oldest single notification still kept was sent; null when none are. */
+  keptSince: string | null;
+}
+
+export type StatisticsPeriod = "day" | "week" | "month" | "year";
+
+export interface OriginStatistics {
+  key: string;
+  name: string | null;
+  notifications: number;
+  previous: number;
+  with_buttons: number;
+  answered: number;
+  bursts: number;
+  night: number;
+}
+
+export interface Statistics {
+  period: StatisticsPeriod;
+  start: string;
+  end: string;
+  has_older: boolean;
+  kept_since: string | null;
+  totals: { notifications: number; with_buttons: number; answered: number; bursts: number; night: number };
+  previous: { notifications: number };
+  buckets: { start: string; counts: Record<string, number> }[];
+  /** Notifications per weekday (Monday first) and hour. */
+  heatmap: number[][];
+  origins: OriginStatistics[];
+}
+
+export interface StatisticsSelection extends TimeRange {
+  origin?: string;
+}
 
 export interface HassEntityState {
   entity_id: string;
@@ -107,7 +149,7 @@ export interface HomeAssistant {
   connection: HassConnection;
   user?: { id: string; name: string; is_admin: boolean };
   language: string;
-  locale?: { language: string; time_zone?: "local" | "server" };
+  locale?: { language: string; time_zone?: "local" | "server"; first_weekday?: string };
   config: { time_zone: string };
   states: Record<string, HassEntityState>;
   dockedSidebar?: "docked" | "always_hidden" | "auto";

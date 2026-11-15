@@ -7,7 +7,7 @@ export interface Clock {
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
-function formatter(language: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+export function formatter(language: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
   const key = `${language}|${JSON.stringify(options)}`;
   let cached = formatters.get(key);
   if (!cached) {

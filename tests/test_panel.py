@@ -20,6 +20,7 @@ from custom_components.notification_journal.const import (
     CONF_RECORD_TELEGRAM,
     CONF_RETENTION_DAYS,
     CONF_SHOW_IN_SIDEBAR,
+    CONF_STATISTICS_YEARS,
     DEFAULT_OPTIONS,
     DOMAIN,
     ICONSET_URL,
@@ -102,7 +103,7 @@ async def test_changed_options_apply_without_restart(hass: HomeAssistant, hass_w
                 key: True
                 for key in (CONF_RECORD_NOTIFY, CONF_RECORD_PERSISTENT, CONF_RECORD_SPEECH, CONF_RECORD_TELEGRAM)
             },
-            "retention": {CONF_RETENTION_DAYS: 90, CONF_MAX_ENTRIES: 100000},
+            "retention": {CONF_RETENTION_DAYS: 90, CONF_MAX_ENTRIES: 100000, CONF_STATISTICS_YEARS: 2},
             "access": {CONF_NON_ADMIN_VISIBILITY: "own"},
             "sidebar": {CONF_SHOW_IN_SIDEBAR: False, CONF_PANEL_TITLE: "Mitteilungen"},
         },

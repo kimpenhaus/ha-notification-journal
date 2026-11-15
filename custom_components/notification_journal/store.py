@@ -9,9 +9,10 @@ import re
 import sqlite3
 import threading
 import time
+from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -31,10 +32,26 @@ from .models import (
     origin_from_dict,
     recipient_from_dict,
 )
+from .statistics import (
+    ALL,
+    BURST_SIZE,
+    BURST_WINDOW,
+    COUNTS_SCHEMA,
+    HOUR,
+    UPSERT_COUNTS,
+    BurstWindow,
+    Counts,
+    contributions,
+    counts_of,
+    difference,
+    group_key,
+    has_buttons,
+    year_start,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 VISIBLE_TO_USER = f"rowid IN (SELECT notification FROM notification_users WHERE user_id IN (?, '{EVERYONE}'))"
 BACKUP_PAUSE_LIMIT = 1800
 MIGRATION_COPY_DAYS = 7
@@ -64,7 +81,8 @@ CREATE TABLE IF NOT EXISTS notifications (
     source_ref TEXT,
     status_time REAL,
     status_by TEXT,
-    answers TEXT NOT NULL DEFAULT '[]'
+    answers TEXT NOT NULL DEFAULT '[]',
+    burst INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS notifications_time ON notifications (time);
 CREATE INDEX IF NOT EXISTS notifications_origin ON notifications (origin_entity_id);
@@ -86,9 +104,37 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notifications_fts USING fts5 (title, message,
 CREATE TRIGGER IF NOT EXISTS notifications_delete AFTER DELETE ON notifications BEGIN
     DELETE FROM notifications_fts WHERE rowid = old.rowid;
 END;
-"""
+""" + "".join(f"{statement};\n" for statement in COUNTS_SCHEMA)
 
-MIGRATIONS: dict[int, tuple[str, ...]] = {
+
+def _fill_counts(db: sqlite3.Connection) -> None:
+    """Count the notifications already stored, in order of time, as they would have been counted when sent."""
+    users: defaultdict[int, set[str]] = defaultdict(set)
+    for rowid, user_id in db.execute("SELECT notification, user_id FROM notification_users"):
+        users[rowid].add(user_id)
+    window = BurstWindow()
+    totals: defaultdict[tuple[str, int, str], list[int]] = defaultdict(lambda: [0, 0, 0, 0])
+    starts: list[tuple[int]] = []
+    rows = db.execute("SELECT rowid, time, data, origin, answers FROM notifications ORDER BY time, rowid").fetchall()
+    for rowid, sent, data, origin, answers in rows:
+        key = group_key(origin_from_dict(json.loads(origin)))
+        burst = window.add(key, sent)
+        if burst:
+            starts.append((rowid,))
+        buttons = has_buttons(None if data is None else json.loads(data))
+        stored_answers = [answer_from_dict(a) for a in json.loads(answers)]
+        hour = int(sent) - int(sent) % HOUR
+        for user_id, counts in contributions(users[rowid], buttons, stored_answers, burst).items():
+            total = totals[(user_id, hour, key)]
+            for index, value in enumerate(counts):
+                total[index] += value
+    db.executemany("UPDATE notifications SET burst = 1 WHERE rowid = ?", starts)
+    db.executemany(UPSERT_COUNTS, [(*key, *values) for key, values in totals.items()])
+
+
+Migration = str | Callable[[sqlite3.Connection], None]
+
+MIGRATIONS: dict[int, tuple[Migration, ...]] = {
     2: (
         """CREATE TABLE notification_archive (
             notification INTEGER NOT NULL REFERENCES notifications (rowid) ON DELETE CASCADE,
@@ -105,6 +151,7 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE INDEX notifications_source_ref ON notifications (source, source_ref) WHERE source_ref IS NOT NULL",
     ),
     4: ("ALTER TABLE notifications ADD COLUMN answers TEXT NOT NULL DEFAULT '[]'",),
+    5: ("ALTER TABLE notifications ADD COLUMN burst INTEGER NOT NULL DEFAULT 0", *COUNTS_SCHEMA, _fill_counts),
 }
 """The steps from the previous schema version to each version; a new version adds its step here."""
 
@@ -120,7 +167,8 @@ class Query:
     user_id: str | None = None
     text: str | None = None
     channel: str | None = None
-    origin_entity_id: str | None = None
+    origin: str | None = None
+    """The key of an origin (`ORIGIN_GROUP`): an automation or script, `integration.<domain>`, or a kind."""
     status: Status | None = None
     since: datetime | None = None
     until: datetime | None = None
@@ -232,11 +280,24 @@ class NotificationStore:
         return await self._run(self._open_records, source)
 
     async def async_facets(self, user_id: str | None) -> dict[str, list[dict[str, str | None]]]:
-        """Return the automations and scripts that sent notifications, limited to a user's records if given.
+        """Return the origins that sent notifications, by key, limited to a user's records if given.
 
         Each comes with the name stored with its newest notification (SQLite takes the bare column from the row of max).
         """
         return await self._run(self._facets, user_id)
+
+    async def async_statistics(
+        self, user_id: str | None, ranges: list[tuple[float, float]]
+    ) -> tuple[list[tuple[int, str, int, int, int, int]], int | None, float | None]:
+        """Return the hourly counts within the ranges, for administrators or a user's view, by hour and origin.
+
+        Also return the oldest hour counted for that view and the time of the oldest record kept.
+        """
+        return await self._run(self._statistics, user_id, ranges)
+
+    async def async_stored_names(self, keys: list[str]) -> dict[str, str]:
+        """Return the names stored with the newest notification of each origin key."""
+        return await self._run(self._stored_names, keys)
 
     async def async_get(self, record_id: str) -> NotificationRecord | None:
         """Return one record."""
@@ -246,10 +307,14 @@ class NotificationStore:
         """Return the records that match a query."""
         return await self._run(self._query, query)
 
-    async def async_purge(self, retention_days: int, max_entries: int) -> int:
-        """Delete records older than the retention and beyond the maximum number; return how many."""
+    async def async_purge(self, retention_days: int, max_entries: int, statistics_years: int) -> int:
+        """Delete records older than the retention and beyond the maximum number; return how many.
+
+        The counts are kept for statistics_years calendar years, and never shorter than the records.
+        """
         cutoff = (dt_util.utcnow() - timedelta(days=retention_days)).timestamp()
-        removed = await self._run(self._purge, cutoff, max_entries)
+        counts_cutoff = min(cutoff, year_start(dt_util.now(), statistics_years).timestamp())
+        removed = await self._run(self._purge, cutoff, max_entries, counts_cutoff)
         if removed:
             self._notify("purged", "")
         return removed
@@ -347,7 +412,10 @@ class NotificationStore:
             connection.execute("BEGIN")
             try:
                 for statement in MIGRATIONS[step]:
-                    connection.execute(statement)
+                    if callable(statement):
+                        statement(connection)
+                    else:
+                        connection.execute(statement)
                 connection.execute(f"PRAGMA user_version = {step}")
                 connection.commit()
             except BaseException:
@@ -370,15 +438,22 @@ class NotificationStore:
 
     def _insert(self, record: NotificationRecord) -> None:
         db = self._db()
+        key = group_key(record.origin)
+        sent = record.time.timestamp()
         with db:
+            earlier = db.execute(
+                f"SELECT count(*) FROM notifications WHERE time > ? AND time <= ? AND {ORIGIN_GROUP} = ?",
+                (sent - BURST_WINDOW, sent, key),
+            ).fetchone()[0]
+            burst = earlier + 1 == BURST_SIZE
             cursor = db.execute(
                 """INSERT INTO notifications (id, time, source, channel, title, message, data, recipients, origin,
                        origin_kind, origin_entity_id, context_id, status, error, grp, inner_calls, source_ref,
-                       status_time, status_by, answers)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       status_time, status_by, answers, burst)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     record.id,
-                    record.time.timestamp(),
+                    sent,
                     record.source,
                     record.channel,
                     record.title,
@@ -397,24 +472,29 @@ class NotificationStore:
                     record.status_time.timestamp() if record.status_time else None,
                     json.dumps(asdict(record.status_by)) if record.status_by else None,
                     json.dumps([answer.as_dict() for answer in record.answers]),
+                    int(burst),
                 ),
             )
             rowid = cursor.lastrowid
             self._index(db, rowid, record)
+            self._count(db, sent, key, counts_of(record, record.user_ids, burst))
 
     def _append_call(self, record_id: str, call: Call) -> None:
         db = self._db()
         with db:
-            row = db.execute("SELECT rowid FROM notifications WHERE id = ?", (record_id,)).fetchone()
+            row = db.execute("SELECT rowid, burst FROM notifications WHERE id = ?", (record_id,)).fetchone()
             if row is None:
                 return
+            rowid, burst = row
+            before = self._get_by_rowid(db, rowid)
             db.execute(
                 "UPDATE notifications SET inner_calls = json_insert(inner_calls, '$[#]', json(?)) WHERE rowid = ?",
-                (json.dumps(asdict(call)), row[0]),
+                (json.dumps(asdict(call)), rowid),
             )
-            record = self._get_by_rowid(db, row[0])
-            if record is not None:
-                self._index(db, row[0], record)
+            record = self._get_by_rowid(db, rowid)
+            if before is not None and record is not None:
+                self._index(db, rowid, record)
+                self._recount(db, before, record, bool(burst))
 
     def _update_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
         db = self._db()
@@ -427,7 +507,7 @@ class NotificationStore:
     def _add_answer(self, source: str, answer: Answer) -> str | None:
         db = self._db()
         offered = (
-            "SELECT rowid, id FROM notifications WHERE source = ? AND EXISTS "
+            "SELECT rowid, id, burst FROM notifications WHERE source = ? AND EXISTS "
             "(SELECT 1 FROM json_each(data, '$.data.actions') WHERE json_extract(value, '$.action') = ?)"
         )
         newest = " ORDER BY time DESC, rowid DESC LIMIT 1"
@@ -441,12 +521,17 @@ class NotificationStore:
             row = db.execute(offered + newest, (source, answer.action)).fetchone()
         if row is None:
             return None
+        rowid, record_id, burst = row
         with db:
+            before = self._get_by_rowid(db, rowid)
             db.execute(
                 "UPDATE notifications SET answers = json_insert(answers, '$[#]', json(?)) WHERE rowid = ?",
-                (json.dumps(answer.as_dict()), row[0]),
+                (json.dumps(answer.as_dict()), rowid),
             )
-        return row[1]
+            if before is not None:
+                after = replace(before, answers=[*before.answers, answer])
+                self._recount(db, before, after, bool(burst))
+        return record_id
 
     def _open_records(self, source: str) -> dict[str, tuple[str, datetime]]:
         rows = self._db().execute(
@@ -454,6 +539,19 @@ class NotificationStore:
             (source, Status.SENT.value),
         )
         return {ref: (record_id, dt_util.utc_from_timestamp(time)) for ref, record_id, time in rows}
+
+    @staticmethod
+    def _count(db: sqlite3.Connection, time: float, key: str, changes: dict[str, Counts]) -> None:
+        hour = int(time) - int(time) % HOUR
+        db.executemany(UPSERT_COUNTS, [(user_id, hour, key, *counts) for user_id, counts in changes.items()])
+
+    def _recount(
+        self, db: sqlite3.Connection, before: NotificationRecord, after: NotificationRecord, burst: bool
+    ) -> None:
+        """Move the counts of a notification from what it was to what it is: more recipients, or an answer."""
+        changes = difference(counts_of(before, before.user_ids, burst), counts_of(after, after.user_ids, burst))
+        if changes:
+            self._count(db, after.time.timestamp(), group_key(after.origin), changes)
 
     @staticmethod
     def _index(db: sqlite3.Connection, rowid: int | None, record: NotificationRecord) -> None:
@@ -518,9 +616,11 @@ class NotificationStore:
         if query.channel:
             where.append("(channel = ? OR grp = ?)")
             params.extend([query.channel, query.channel])
-        if query.origin_entity_id:
-            where.append("origin_entity_id = ?")
-            params.append(query.origin_entity_id)
+        if query.origin:
+            # Automations and scripts are found through the index on origin_entity_id.
+            entity = "." in query.origin and not query.origin.startswith(INTEGRATION_KEY_PREFIX)
+            where.append("origin_entity_id = ?" if entity else f"{ORIGIN_GROUP} = ?")
+            params.append(query.origin)
         if query.status is not None:
             where.append("status = ?")
             params.append(query.status.value)
@@ -553,22 +653,47 @@ class NotificationStore:
         return Page(records=[self._from_row(row) for row in rows], total=total, groups=groups)
 
     def _facets(self, user_id: str | None) -> dict[str, list[dict[str, str | None]]]:
-        where = f"WHERE {VISIBLE_TO_USER} AND" if user_id else "WHERE"
+        where = f"WHERE {VISIBLE_TO_USER}" if user_id else ""
         params = [user_id] if user_id else []
         origins = (
             self._db()
             .execute(
-                f"SELECT origin_entity_id, json_extract(origin, '$.name'), max(time) FROM notifications {where} "
-                "origin_entity_id IS NOT NULL GROUP BY origin_entity_id",
+                f"SELECT {ORIGIN_GROUP}, json_extract(origin, '$.name'), max(time) FROM notifications {where} "
+                f"GROUP BY {ORIGIN_GROUP}",
                 params,
             )
             .fetchall()
         )
         return {"origins": [{"id": row[0], "name": row[1]} for row in origins]}
 
-    def _purge(self, cutoff: float, max_entries: int) -> int:
+    def _statistics(
+        self, user_id: str | None, ranges: list[tuple[float, float]]
+    ) -> tuple[list[tuple[int, str, int, int, int, int]], int | None, float | None]:
+        db = self._db()
+        users = [ALL] if user_id is None else [user_id, EVERYONE]
+        view = f"user_id IN ({', '.join('?' * len(users))})"
+        within = " OR ".join("(hour >= ? AND hour < ?)" for _ in ranges)
+        rows = db.execute(
+            "SELECT hour, origin, sum(notifications), sum(with_buttons), sum(answered), sum(bursts) "
+            f"FROM notification_counts WHERE {view} AND ({within}) GROUP BY hour, origin",
+            [*users, *(bound for span in ranges for bound in span)],
+        ).fetchall()
+        oldest = db.execute(f"SELECT min(hour) FROM notification_counts WHERE {view}", users).fetchone()[0]
+        kept = db.execute("SELECT min(time) FROM notifications").fetchone()[0]
+        return rows, oldest, kept
+
+    def _stored_names(self, keys: list[str]) -> dict[str, str]:
+        rows = self._db().execute(
+            f"SELECT {ORIGIN_GROUP}, json_extract(origin, '$.name'), max(time) FROM notifications "
+            f"WHERE {ORIGIN_GROUP} IN ({', '.join('?' * len(keys))}) GROUP BY {ORIGIN_GROUP}",
+            keys,
+        )
+        return {key: name for key, name, _ in rows if name}
+
+    def _purge(self, cutoff: float, max_entries: int, counts_cutoff: float) -> int:
         db = self._db()
         with db:
+            db.execute("DELETE FROM notification_counts WHERE hour < ?", (counts_cutoff,))
             removed = db.execute("DELETE FROM notifications WHERE time < ?", (cutoff,)).rowcount
             removed += db.execute(
                 """DELETE FROM notifications WHERE rowid IN (
@@ -601,6 +726,7 @@ class NotificationStore:
             status_time,
             status_by,
             answers,
+            _burst,
         ) = row
         return NotificationRecord(
             id=record_id,

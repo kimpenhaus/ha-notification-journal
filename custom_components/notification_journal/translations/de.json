@@ -37,11 +37,13 @@
             "name": "Aufbewahrung",
             "data": {
               "retention_days": "Aufbewahren für",
-              "max_entries": "Höchstens"
+              "max_entries": "Höchstens",
+              "statistics_years": "Statistik aufbewahren (Jahre)"
             },
             "data_description": {
               "retention_days": "Ältere Einträge werden einmal täglich gelöscht.",
-              "max_entries": "Bei mehr werden die ältesten zuerst gelöscht."
+              "max_entries": "Bei mehr werden die ältesten zuerst gelöscht.",
+              "statistics_years": "Stündliche Zählungen für die Statistik, ohne Texte; ganze Kalenderjahre, mindestens zwei für den Vergleich mit dem Vorjahr, und nie kürzer als die Benachrichtigungen."
             }
           },
           "access": {

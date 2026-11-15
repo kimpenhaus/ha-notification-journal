@@ -25,6 +25,7 @@ from .const import (
     CONF_RECORD_TELEGRAM,
     CONF_RETENTION_DAYS,
     CONF_SHOW_IN_SIDEBAR,
+    CONF_STATISTICS_YEARS,
     DATABASE_FILE,
     DEFAULT_OPTIONS,
     DOMAIN,
@@ -111,11 +112,12 @@ def _start(
     """Start the purge, the forwarding of changes to subscribers and the event sources."""
     retention_days = int(options[CONF_RETENTION_DAYS])
     max_entries = int(options[CONF_MAX_ENTRIES])
+    statistics_years = int(options[CONF_STATISTICS_YEARS])
 
     @callback
     def _purge(_now: datetime | None = None) -> None:
         entry.async_create_background_task(
-            hass, store.async_purge(retention_days, max_entries), "notification_journal purge"
+            hass, store.async_purge(retention_days, max_entries, statistics_years), "notification_journal purge"
         )
 
     async def _publish(change: str, record_id: str) -> None:

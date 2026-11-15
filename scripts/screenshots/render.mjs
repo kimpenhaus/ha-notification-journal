@@ -43,6 +43,13 @@ await shot("timeline-light", "lang=en", { width: 1280, height: 1180 }, group);
 await shot("timeline-dark", "lang=en&theme=dark", { width: 1280, height: 1180 }, group);
 await shot("automations-light", "lang=en", { width: 1280, height: 1000 }, byOrigin);
 await shot("automations-dark", "lang=en&theme=dark", { width: 1280, height: 1000 }, byOrigin);
+const statistics = async (page) => {
+  await page.locator('button[title="Statistics"]').click();
+  await page.waitForSelector("notification-journal-statistics .stats");
+  await page.locator("notification-journal-statistics .hit").last().hover();
+};
+await shot("statistics-light", "lang=en", { width: 1280, height: 1100 }, statistics);
+await shot("statistics-dark", "lang=en&theme=dark", { width: 1280, height: 1100 }, statistics);
 await shot("mobile-light", "lang=en&narrow=1", { width: 390, height: 844 });
 await shot("mobile-dark", "lang=en&narrow=1&theme=dark", { width: 390, height: 844 });
 console.log(errors.length ? errors.join("\n") : "no console errors");

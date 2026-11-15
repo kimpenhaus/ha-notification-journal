@@ -135,7 +135,8 @@ async def test_filters(store: NotificationStore) -> None:
 
     assert await _ids(store, channel="notify.family") == ["b"]
     assert await _ids(store, status=Status.FAILED) == ["b"]
-    assert await _ids(store, origin_entity_id="script.night") == ["c"]
+    assert await _ids(store, origin="script.night") == ["c"]
+    assert await _ids(store, origin="automation.garage") == ["b", "a"]
     assert set(await _ids(store, since=dt_util.utcnow() - timedelta(days=1))) == {"b", "c"}
     assert await _ids(store, until=dt_util.utcnow() - timedelta(days=1)) == ["a"]
 
@@ -185,7 +186,7 @@ async def test_purge_by_age_and_maximum(store: NotificationStore) -> None:
         store.add(_record(f"r{index}", "x", [ANNA], age=timedelta(days=index * 10)))
     await store.async_flush()
 
-    assert await store.async_purge(retention_days=25, max_entries=2) == 3
+    assert await store.async_purge(retention_days=25, max_entries=2, statistics_years=2) == 3
     assert await _ids(store) == ["r0", "r1"]
     assert await _ids(store, user_id="user-anna") == ["r0", "r1"]
     assert await _ids(store, text="x") == ["r0", "r1"]
@@ -217,5 +218,5 @@ async def test_purge_tells_listeners(store: NotificationStore) -> None:
     await store.async_flush()
     changes.clear()
 
-    assert await store.async_purge(30, 1000) == 1
+    assert await store.async_purge(30, 1000, 2) == 1
     assert changes == [("purged", "")]

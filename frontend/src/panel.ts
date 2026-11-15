@@ -1,13 +1,15 @@
 import { css, html, LitElement, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 
-import { type Clock, dayKey, dayLabel } from "./format";
+import { type Clock, dayKey, dayLabel, formatter } from "./format";
 import {
   icon,
   mdiArchiveArrowDownOutline,
   mdiArchiveArrowUpOutline,
   mdiArchiveOutline,
+  mdiArrowLeft,
   mdiCalendarClockOutline,
+  mdiChartBar,
   mdiCheckboxMultipleMarkedOutline,
   mdiChevronDown,
   mdiClose,
@@ -27,6 +29,7 @@ import {
 } from "./icons";
 import { countText, type Localize, localizer } from "./localize";
 import { originGlyph } from "./record";
+import { type NotificationJournalStatistics, statisticsStyles } from "./statistics";
 import type {
   Facets,
   Filters,
@@ -36,6 +39,7 @@ import type {
   PanelInfo,
   Period,
   RecordEvent,
+  StatisticsSelection,
   Status,
   View,
 } from "./types";
@@ -43,7 +47,7 @@ import type {
 const PAGE_SIZE = 50;
 const ARCHIVE_BATCH = 200;
 const SEARCH_DELAY = 300;
-const PERIODS: Record<Exclude<Period, "">, number> = { day: 1, week: 7, month: 30, quarter: 90 };
+const PERIODS: Record<Exclude<Period, "" | "range">, number> = { day: 1, week: 7, month: 30, quarter: 90 };
 const STATUSES: Status[] = ["sent", "dismissed", "replaced"];
 const DEFAULT_FILTERS: Filters = {
   text: "",
@@ -121,6 +125,7 @@ export class NotificationJournalPanel extends LitElement {
     _archived: { state: true },
     _selecting: { state: true },
     _selected: { state: true },
+    _screen: { state: true },
   };
 
   declare narrow: boolean;
@@ -140,12 +145,14 @@ export class NotificationJournalPanel extends LitElement {
   declare _archived: boolean;
   declare _selecting: boolean;
   declare _selected: Set<string>;
+  declare _screen: "list" | "statistics";
 
   private _hass?: HomeAssistant;
   private _request = 0;
   private _unsubscribe?: Promise<() => Promise<void>>;
   private _searchTimer?: number;
   private _facetsTimer?: number;
+  private _statisticsTimer?: number;
   private _observer?: IntersectionObserver;
   private _localizer?: { language: string; localize: Localize };
   private _clockCache?: Clock;
@@ -166,6 +173,7 @@ export class NotificationJournalPanel extends LitElement {
     this._archived = false;
     this._selecting = false;
     this._selected = new Set();
+    this._screen = "list";
     this._search = "";
     this._loading = false;
     this._pending = 0;
@@ -238,6 +246,7 @@ export class NotificationJournalPanel extends LitElement {
     this._observer = undefined;
     window.clearTimeout(this._searchTimer);
     window.clearTimeout(this._facetsTimer);
+    window.clearTimeout(this._statisticsTimer);
   }
 
   private _query(): Record<string, unknown> {
@@ -248,7 +257,12 @@ export class NotificationJournalPanel extends LitElement {
     if (filters.origin) query.origin = filters.origin;
     if (this._archived) query.archived = true;
     if (this._view === "origin") query.group_by = "origin";
-    if (filters.period) query.since = new Date(Date.now() - PERIODS[filters.period] * 86_400_000).toISOString();
+    if (filters.period === "range" && filters.range) {
+      query.since = filters.range.since;
+      query.until = filters.range.until;
+    } else if (filters.period && filters.period !== "range") {
+      query.since = new Date(Date.now() - PERIODS[filters.period] * 86_400_000).toISOString();
+    }
     return query;
   }
 
@@ -326,7 +340,40 @@ export class NotificationJournalPanel extends LitElement {
       }
       window.clearTimeout(this._facetsTimer);
       this._facetsTimer = window.setTimeout(() => void this._loadFacets(), 2000);
+      if (this._screen === "statistics") {
+        window.clearTimeout(this._statisticsTimer);
+        this._statisticsTimer = window.setTimeout(() => void this._statistics?.refresh(), 2000);
+      }
     }
+  }
+
+  private get _statistics(): NotificationJournalStatistics | null {
+    return this.renderRoot.querySelector("notification-journal-statistics");
+  }
+
+  private _showStatistics(show: boolean): void {
+    this._screen = show ? "statistics" : "list";
+    this._endSelection();
+    this.renderRoot.querySelector(".content")?.scrollTo({ top: 0 });
+  }
+
+  /** Open the list on what a bar or an origin of the statistics stands for. */
+  private _openSelection(selection: StatisticsSelection): void {
+    const { origin, ...range } = selection;
+    this._screen = "list";
+    this._archived = false;
+    this._search = "";
+    window.clearTimeout(this._searchTimer);
+    this._set({ text: "", status: "", origin: origin ?? "", period: "range", range });
+  }
+
+  /** The name of an origin in the filter; Home Assistant, a user by hand and an unknown origin have none of their own. */
+  private _originName(localize: Localize, id: string, name: string | null): string {
+    if (name) return name;
+    if (id === "user") return localize("origin_by_hand");
+    if (id === "system") return localize("origin_system");
+    if (id === "unknown") return localize("origin_unknown");
+    return id;
   }
 
   private _removed(recordId: string): void {
@@ -545,6 +592,30 @@ export class NotificationJournalPanel extends LitElement {
         </div>
       `;
     }
+    if (this._screen === "statistics") {
+      return html`
+        <div class="toolbar">
+          <button class="icon-button" title=${localize("back")} @click=${() => this._showStatistics(false)}>
+            ${icon(mdiArrowLeft, localize("back"))}
+          </button>
+          <h1>${localize("statistics")}</h1>
+          <button class="icon-button" title=${localize("refresh")} @click=${() => void this._statistics?.refresh()}>
+            ${icon(mdiRefresh, localize("refresh"))}
+          </button>
+        </div>
+        <div class="content">
+          <div class="wrapper">
+            <notification-journal-statistics
+              .hass=${this._hass}
+              .localize=${localize}
+              .clock=${this._clock}
+              .originIcons=${this._lookups().originIcons}
+              @statistics-select=${(event: CustomEvent<StatisticsSelection>) => this._openSelection(event.detail)}
+            ></notification-journal-statistics>
+          </div>
+        </div>
+      `;
+    }
     return html`
       <div class="toolbar">
         ${
@@ -559,6 +630,9 @@ export class NotificationJournalPanel extends LitElement {
             : nothing
         }
         <h1>${this.panel?.title || localize("title")}</h1>
+        <button class="icon-button" title=${localize("statistics")} @click=${() => this._showStatistics(true)}>
+          ${icon(mdiChartBar, localize("statistics"))}
+        </button>
         <button class="icon-button" title=${localize("refresh")} @click=${() => this._refresh()}>
           ${icon(mdiRefresh, localize("refresh"))}
         </button>
@@ -636,7 +710,9 @@ export class NotificationJournalPanel extends LitElement {
             html`<option value="" ?selected=${!filters.origin}>${localize("origin_all")}</option>
               ${facets.origins.map(
                 (option) =>
-                  html`<option value=${option.id} ?selected=${filters.origin === option.id}>${option.name}</option>`,
+                  html`<option value=${option.id} ?selected=${filters.origin === option.id}>
+                    ${this._originName(localize, option.id, option.name)}
+                  </option>`,
               )}`,
           )}
           ${select(
@@ -644,7 +720,12 @@ export class NotificationJournalPanel extends LitElement {
             "period",
             localize("period_all"),
             html`<option value="" ?selected=${!filters.period}>${localize("period_all")}</option>
-              ${(Object.keys(PERIODS) as Exclude<Period, "">[]).map(
+              ${
+                filters.period === "range" && filters.range
+                  ? html`<option value="range" selected>${filters.range.label}</option>`
+                  : nothing
+              }
+              ${(Object.keys(PERIODS) as Exclude<Period, "" | "range">[]).map(
                 (period) =>
                   html`<option value=${period} ?selected=${filters.period === period}>
                     ${localize(`period_${period}`)}
@@ -696,8 +777,20 @@ export class NotificationJournalPanel extends LitElement {
                 </button>`
           }
         </div>
+        ${this._keptNotice(localize)}
       </div>
     `;
+  }
+
+  /** Say so when the list opened from the statistics reaches back further than single notifications are kept. */
+  private _keptNotice(localize: Localize): TemplateResult | typeof nothing {
+    const range = this._filters.period === "range" ? this._filters.range : undefined;
+    if (!range?.keptSince || Date.parse(range.keptSince) <= Date.parse(range.since)) return nothing;
+    const clock = this._clock;
+    const date = formatter(clock.language, { dateStyle: "medium", timeZone: clock.timeZone }).format(
+      new Date(range.keptSince),
+    );
+    return html`<p class="kept">${localize("kept_since", { date })}</p>`;
   }
 
   private _foldAll(localize: Localize): TemplateResult | typeof nothing {
@@ -828,463 +921,471 @@ export class NotificationJournalPanel extends LitElement {
     </button>`;
   }
 
-  static override styles = css`
-    :host {
-      display: flex;
-      flex-direction: column;
-      height: 100%;
-      background: var(--primary-background-color);
-      color: var(--primary-text-color);
-      font-family: var(--ha-font-family-body);
-      -webkit-font-smoothing: antialiased;
-    }
-    .toolbar {
-      flex: none;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      box-sizing: border-box;
-      height: calc(var(--header-height, 56px) + var(--safe-area-inset-top, 0px));
-      padding: var(--safe-area-inset-top, 0px) 8px 0 12px;
-      background: var(--app-header-background-color);
-      color: var(--app-header-text-color);
-      border-bottom: var(--app-header-border-bottom);
-    }
-    h1 {
-      flex: 1;
-      margin: 0 0 0 12px;
-      font-size: 1.25rem;
-      font-weight: 400;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .icon {
-      width: 24px;
-      height: 24px;
-      fill: currentColor;
-      flex: none;
-    }
-    .icon-button {
-      display: grid;
-      place-items: center;
-      width: 44px;
-      height: 44px;
-      padding: 0;
-      border: none;
-      border-radius: 50%;
-      background: none;
-      color: inherit;
-      cursor: pointer;
-    }
-    .icon-button:hover {
-      background: color-mix(in srgb, currentColor 10%, transparent);
-    }
-    .icon-button.small {
-      width: 32px;
-      height: 32px;
-      color: var(--secondary-text-color);
-    }
-    .icon-button.small .icon {
-      width: 18px;
-      height: 18px;
-    }
-    .content {
-      flex: 1;
-      overflow-y: auto;
-      padding-bottom: var(--safe-area-inset-bottom, 0px);
-    }
-    .wrapper {
-      max-width: 1040px;
-      margin: 0 auto;
-      padding: 16px 16px 32px;
-      box-sizing: border-box;
-    }
-    .filters {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .search {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      height: 48px;
-      padding: 0 8px 0 14px;
-      border-radius: 24px;
-      background: var(--card-background-color);
-      border: 1px solid var(--divider-color);
-      color: var(--secondary-text-color);
-    }
-    .search:focus-within {
-      border-color: var(--primary-color);
-    }
-    .search input {
-      flex: 1;
-      min-width: 0;
-      height: 100%;
-      border: none;
-      outline: none;
-      background: none;
-      color: var(--primary-text-color);
-      font: inherit;
-      font-size: 1rem;
-    }
-    .search input::-webkit-search-cancel-button {
-      display: none;
-    }
-    .selects {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-    .select {
-      position: relative;
-      display: inline-flex;
-      max-width: 200px;
-    }
-    .select select {
-      width: 100%;
-    }
-    .select::after {
-      content: "";
-      position: absolute;
-      right: 12px;
-      top: 50%;
-      width: 6px;
-      height: 6px;
-      margin-top: -5px;
-      border-right: 2px solid currentColor;
-      border-bottom: 2px solid currentColor;
-      transform: rotate(45deg);
-      pointer-events: none;
-      color: var(--secondary-text-color);
-    }
-    select,
-    .sort {
-      appearance: none;
-      max-width: 100%;
-      height: 34px;
-      padding: 0 32px 0 14px;
-      border-radius: 17px;
-      border: 1px solid var(--divider-color);
-      background: var(--card-background-color);
-      color: var(--primary-text-color);
-      font: inherit;
-      font-size: 0.875rem;
-      text-overflow: ellipsis;
-      cursor: pointer;
-    }
-    .select.active select {
-      border-color: var(--primary-color);
-      background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
-    }
-    option,
-    optgroup {
-      color: var(--primary-text-color);
-      background: var(--card-background-color);
-    }
-    .sort {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 0 14px 0 10px;
-    }
-    .sort .icon {
-      width: 18px;
-      height: 18px;
-      color: var(--secondary-text-color);
-    }
-    select:focus-visible,
-    button:focus-visible {
-      outline: 2px solid var(--primary-color);
-      outline-offset: 2px;
-    }
-    .summary {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      min-height: 32px;
-      color: var(--secondary-text-color);
-      font-size: 0.875rem;
-    }
-    .text-button {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 10px;
-      border: none;
-      border-radius: 6px;
-      background: none;
-      color: var(--primary-color);
-      font: inherit;
-      font-size: 0.875rem;
-      font-weight: 500;
-      cursor: pointer;
-    }
-    .text-button .icon {
-      width: 18px;
-      height: 18px;
-    }
-    .text-button:hover {
-      background: color-mix(in srgb, var(--primary-color) 10%, transparent);
-    }
-    .text-button[disabled] {
-      color: var(--disabled-text-color);
-      cursor: default;
-    }
-    .list.busy {
-      opacity: 0.6;
-      transition: opacity 0.2s 0.15s;
-    }
-    .list {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .section {
-      display: flex;
-      align-items: center;
-      width: 100%;
-      border: none;
-      text-align: left;
-      font-family: inherit;
-      cursor: pointer;
-    }
-    .section > .icon {
-      width: 20px;
-      height: 20px;
-      color: var(--secondary-text-color);
-      transition: transform 0.15s;
-    }
-    .section.collapsed > .icon {
-      transform: rotate(-90deg);
-    }
-    .day {
-      gap: 6px;
-      margin: 14px 0 0;
-      padding: 4px 0;
-      background: none;
-      font-size: 0.8rem;
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--secondary-text-color);
-    }
-    .day:first-child {
-      margin-top: 4px;
-    }
-    .group {
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin: 14px 0 0;
-      padding: 8px 4px;
-      font-size: 1rem;
-      font-weight: 500;
-      color: var(--primary-text-color);
-      background: var(--primary-background-color);
-    }
-    .group:first-child {
-      margin-top: 0;
-    }
-    .section.collapsed + .section {
-      margin-top: 4px;
-    }
-    .spacer {
-      flex: 1;
-    }
-    .notice {
-      margin-left: 12px;
-      color: var(--error-color);
-    }
-    .group-icon {
-      display: grid;
-      place-items: center;
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
-      color: var(--primary-color);
-      background: color-mix(in srgb, var(--primary-color) 14%, transparent);
-    }
-    .group-icon .icon {
-      width: 18px;
-      height: 18px;
-    }
-    .group-icon ha-icon {
-      --mdc-icon-size: 18px;
-      display: inline-flex;
-    }
-    .group-name {
-      flex: 1;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .group-count {
-      min-width: 22px;
-      padding: 1px 8px;
-      box-sizing: border-box;
-      border-radius: 11px;
-      font-size: 0.8rem;
-      text-align: center;
-      color: var(--secondary-text-color);
-      background: var(--secondary-background-color);
-    }
-    .view {
-      display: inline-flex;
-      height: 34px;
-      padding: 2px;
-      box-sizing: border-box;
-      border-radius: 17px;
-      border: 1px solid var(--divider-color);
-      background: var(--card-background-color);
-    }
-    .view button {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 0 12px;
-      border: none;
-      border-radius: 15px;
-      background: none;
-      color: var(--secondary-text-color);
-      font: inherit;
-      font-size: 0.875rem;
-      cursor: pointer;
-    }
-    .view button .icon {
-      width: 18px;
-      height: 18px;
-    }
-    .options {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 8px;
-    }
-    .toolbar.selecting {
-      background: var(--primary-color);
-      color: var(--text-primary-color);
-    }
-    .toolbar-button {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      height: 36px;
-      padding: 0 12px;
-      border: none;
-      border-radius: 18px;
-      background: none;
-      color: inherit;
-      font: inherit;
-      font-size: 0.875rem;
-      font-weight: 500;
-      cursor: pointer;
-    }
-    .toolbar-button .icon {
-      width: 20px;
-      height: 20px;
-    }
-    .toolbar-button:hover {
-      background: color-mix(in srgb, currentColor 12%, transparent);
-    }
-    .toolbar-button.strong {
-      background: color-mix(in srgb, currentColor 18%, transparent);
-    }
-    .toolbar-button[disabled] {
-      opacity: 0.5;
-      cursor: default;
-    }
-    .view button.selected {
-      color: var(--text-primary-color);
-      background: var(--primary-color);
-    }
-    .pending {
-      position: sticky;
-      top: 8px;
-      z-index: 1;
-      display: block;
-      margin: 0 auto 10px;
-      padding: 8px 18px;
-      border: none;
-      border-radius: 18px;
-      background: var(--primary-color);
-      color: var(--text-primary-color);
-      font: inherit;
-      font-size: 0.875rem;
-      font-weight: 500;
-      box-shadow: 0 2px 6px var(--shadow-color);
-      cursor: pointer;
-    }
-    .sentinel {
-      display: flex;
-      justify-content: center;
-      padding: 16px 0;
-    }
-    .empty {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 64px 16px;
-      text-align: center;
-      color: var(--secondary-text-color);
-    }
-    .empty .icon {
-      width: 56px;
-      height: 56px;
-      opacity: 0.5;
-    }
-    .empty h2 {
-      margin: 16px 0 4px;
-      font-size: 1.1rem;
-      font-weight: 500;
-      color: var(--primary-text-color);
-    }
-    .empty p {
-      margin: 8px 0;
-    }
-    .visually-hidden {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-      clip-path: inset(50%);
-      white-space: nowrap;
-    }
-    @media (max-width: 600px) {
-      .wrapper {
-        padding: 12px 8px 24px;
+  static override styles = [
+    css`
+      :host {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        background: var(--primary-background-color);
+        color: var(--primary-text-color);
+        font-family: var(--ha-font-family-body);
+        -webkit-font-smoothing: antialiased;
       }
-      .selects {
+      .toolbar {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        box-sizing: border-box;
+        height: calc(var(--header-height, 56px) + var(--safe-area-inset-top, 0px));
+        padding: var(--safe-area-inset-top, 0px) 8px 0 12px;
+        background: var(--app-header-background-color);
+        color: var(--app-header-text-color);
+        border-bottom: var(--app-header-border-bottom);
+      }
+      h1 {
+        flex: 1;
+        margin: 0 0 0 12px;
+        font-size: 1.25rem;
+        font-weight: 400;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .icon {
+        width: 24px;
+        height: 24px;
+        fill: currentColor;
+        flex: none;
+      }
+      .icon-button {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        border: none;
+        border-radius: 50%;
+        background: none;
+        color: inherit;
+        cursor: pointer;
       }
-      .view {
-        grid-column: 1 / -1;
+      .icon-button:hover {
+        background: color-mix(in srgb, currentColor 10%, transparent);
       }
-      .toolbar-button span {
+      .icon-button.small {
+        width: 32px;
+        height: 32px;
+        color: var(--secondary-text-color);
+      }
+      .icon-button.small .icon {
+        width: 18px;
+        height: 18px;
+      }
+      .content {
+        flex: 1;
+        overflow-y: auto;
+        padding-bottom: var(--safe-area-inset-bottom, 0px);
+      }
+      .wrapper {
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 16px 16px 32px;
+        box-sizing: border-box;
+      }
+      .filters {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .search {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 48px;
+        padding: 0 8px 0 14px;
+        border-radius: 24px;
+        background: var(--card-background-color);
+        border: 1px solid var(--divider-color);
+        color: var(--secondary-text-color);
+      }
+      .search:focus-within {
+        border-color: var(--primary-color);
+      }
+      .search input {
+        flex: 1;
+        min-width: 0;
+        height: 100%;
+        border: none;
+        outline: none;
+        background: none;
+        color: var(--primary-text-color);
+        font: inherit;
+        font-size: 1rem;
+      }
+      .search input::-webkit-search-cancel-button {
         display: none;
       }
-      .toolbar-button {
-        padding: 0 10px;
-      }
-      .view button {
-        flex: 1;
-        justify-content: center;
+      .selects {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
       }
       .select {
-        max-width: none;
+        position: relative;
+        display: inline-flex;
+        max-width: 200px;
+      }
+      .select select {
+        width: 100%;
+      }
+      .select::after {
+        content: "";
+        position: absolute;
+        right: 12px;
+        top: 50%;
+        width: 6px;
+        height: 6px;
+        margin-top: -5px;
+        border-right: 2px solid currentColor;
+        border-bottom: 2px solid currentColor;
+        transform: rotate(45deg);
+        pointer-events: none;
+        color: var(--secondary-text-color);
+      }
+      select,
+      .sort {
+        appearance: none;
+        max-width: 100%;
+        height: 34px;
+        padding: 0 32px 0 14px;
+        border-radius: 17px;
+        border: 1px solid var(--divider-color);
+        background: var(--card-background-color);
+        color: var(--primary-text-color);
+        font: inherit;
+        font-size: 0.875rem;
+        text-overflow: ellipsis;
+        cursor: pointer;
+      }
+      .select.active select {
+        border-color: var(--primary-color);
+        background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
+      }
+      option,
+      optgroup {
+        color: var(--primary-text-color);
+        background: var(--card-background-color);
       }
       .sort {
-        justify-content: center;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 14px 0 10px;
       }
-    }
-  `;
+      .sort .icon {
+        width: 18px;
+        height: 18px;
+        color: var(--secondary-text-color);
+      }
+      select:focus-visible,
+      button:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+      }
+      .summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 32px;
+        color: var(--secondary-text-color);
+        font-size: 0.875rem;
+      }
+      .text-button {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border: none;
+        border-radius: 6px;
+        background: none;
+        color: var(--primary-color);
+        font: inherit;
+        font-size: 0.875rem;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      .text-button .icon {
+        width: 18px;
+        height: 18px;
+      }
+      .text-button:hover {
+        background: color-mix(in srgb, var(--primary-color) 10%, transparent);
+      }
+      .text-button[disabled] {
+        color: var(--disabled-text-color);
+        cursor: default;
+      }
+      .list.busy {
+        opacity: 0.6;
+        transition: opacity 0.2s 0.15s;
+      }
+      .list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .section {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        border: none;
+        text-align: left;
+        font-family: inherit;
+        cursor: pointer;
+      }
+      .section > .icon {
+        width: 20px;
+        height: 20px;
+        color: var(--secondary-text-color);
+        transition: transform 0.15s;
+      }
+      .section.collapsed > .icon {
+        transform: rotate(-90deg);
+      }
+      .day {
+        gap: 6px;
+        margin: 14px 0 0;
+        padding: 4px 0;
+        background: none;
+        font-size: 0.8rem;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--secondary-text-color);
+      }
+      .day:first-child {
+        margin-top: 4px;
+      }
+      .group {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 14px 0 0;
+        padding: 8px 4px;
+        font-size: 1rem;
+        font-weight: 500;
+        color: var(--primary-text-color);
+        background: var(--primary-background-color);
+      }
+      .group:first-child {
+        margin-top: 0;
+      }
+      .section.collapsed + .section {
+        margin-top: 4px;
+      }
+      .spacer {
+        flex: 1;
+      }
+      .notice {
+        margin-left: 12px;
+        color: var(--error-color);
+      }
+      .kept {
+        margin: 0;
+        color: var(--secondary-text-color);
+        font-size: 0.875rem;
+      }
+      .group-icon {
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        color: var(--primary-color);
+        background: color-mix(in srgb, var(--primary-color) 14%, transparent);
+      }
+      .group-icon .icon {
+        width: 18px;
+        height: 18px;
+      }
+      .group-icon ha-icon {
+        --mdc-icon-size: 18px;
+        display: inline-flex;
+      }
+      .group-name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .group-count {
+        min-width: 22px;
+        padding: 1px 8px;
+        box-sizing: border-box;
+        border-radius: 11px;
+        font-size: 0.8rem;
+        text-align: center;
+        color: var(--secondary-text-color);
+        background: var(--secondary-background-color);
+      }
+      .view {
+        display: inline-flex;
+        height: 34px;
+        padding: 2px;
+        box-sizing: border-box;
+        border-radius: 17px;
+        border: 1px solid var(--divider-color);
+        background: var(--card-background-color);
+      }
+      .view button {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 12px;
+        border: none;
+        border-radius: 15px;
+        background: none;
+        color: var(--secondary-text-color);
+        font: inherit;
+        font-size: 0.875rem;
+        cursor: pointer;
+      }
+      .view button .icon {
+        width: 18px;
+        height: 18px;
+      }
+      .options {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+      .toolbar.selecting {
+        background: var(--primary-color);
+        color: var(--text-primary-color);
+      }
+      .toolbar-button {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 36px;
+        padding: 0 12px;
+        border: none;
+        border-radius: 18px;
+        background: none;
+        color: inherit;
+        font: inherit;
+        font-size: 0.875rem;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      .toolbar-button .icon {
+        width: 20px;
+        height: 20px;
+      }
+      .toolbar-button:hover {
+        background: color-mix(in srgb, currentColor 12%, transparent);
+      }
+      .toolbar-button.strong {
+        background: color-mix(in srgb, currentColor 18%, transparent);
+      }
+      .toolbar-button[disabled] {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .view button.selected {
+        color: var(--text-primary-color);
+        background: var(--primary-color);
+      }
+      .pending {
+        position: sticky;
+        top: 8px;
+        z-index: 1;
+        display: block;
+        margin: 0 auto 10px;
+        padding: 8px 18px;
+        border: none;
+        border-radius: 18px;
+        background: var(--primary-color);
+        color: var(--text-primary-color);
+        font: inherit;
+        font-size: 0.875rem;
+        font-weight: 500;
+        box-shadow: 0 2px 6px var(--shadow-color);
+        cursor: pointer;
+      }
+      .sentinel {
+        display: flex;
+        justify-content: center;
+        padding: 16px 0;
+      }
+      .empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 64px 16px;
+        text-align: center;
+        color: var(--secondary-text-color);
+      }
+      .empty .icon {
+        width: 56px;
+        height: 56px;
+        opacity: 0.5;
+      }
+      .empty h2 {
+        margin: 16px 0 4px;
+        font-size: 1.1rem;
+        font-weight: 500;
+        color: var(--primary-text-color);
+      }
+      .empty p {
+        margin: 8px 0;
+      }
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+      @media (max-width: 600px) {
+        .wrapper {
+          padding: 12px 8px 24px;
+        }
+        .selects {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+        }
+        .view {
+          grid-column: 1 / -1;
+        }
+        .toolbar-button span {
+          display: none;
+        }
+        .toolbar-button {
+          padding: 0 10px;
+        }
+        .view button {
+          flex: 1;
+          justify-content: center;
+        }
+        .select {
+          max-width: none;
+        }
+        .sort {
+          justify-content: center;
+        }
+      }
+    `,
+    statisticsStyles,
+  ];
 }
 
 if (!customElements.get("notification-journal-panel")) {

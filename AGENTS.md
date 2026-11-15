@@ -22,6 +22,7 @@
 
 - Code, comments, documentation, issues and commits in English; every user-facing text through translations with `en` and `de`.
 - Built for any Home Assistant installation: no names, entity IDs or addresses of a particular home in code, defaults or tests; test data and screenshots (`scripts/screenshots/`) are made up.
+- Every change updates `README.md`, `docs/DEVELOPMENT.md` and this file where it changes what they describe, and a change users can see renders the screenshots again (`scripts/screenshots/render.sh`, made-up data extended for it), in the same pull request.
 - `README.md` is for users (what it does, installation, options, privacy); how it is built, tested and released goes into `docs/DEVELOPMENT.md`. Its section *How this project was made* is wanted by the maintainer and stays.
 - Log at `warning` and above for what a user has to act on; routine operation logs at `debug`.
 - Only add a comment when the reader cannot derive it from the code.

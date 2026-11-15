@@ -23,12 +23,15 @@ from .const import (
     CONF_RECORD_TELEGRAM,
     CONF_RETENTION_DAYS,
     CONF_SHOW_IN_SIDEBAR,
+    CONF_STATISTICS_YEARS,
     DEFAULT_OPTIONS,
     DOMAIN,
     MAX_MAX_ENTRIES,
     MAX_RETENTION_DAYS,
+    MAX_STATISTICS_YEARS,
     MIN_MAX_ENTRIES,
     MIN_RETENTION_DAYS,
+    MIN_STATISTICS_YEARS,
     PANEL_ICON,
     TITLE,
     Visibility,
@@ -65,6 +68,7 @@ class NotificationJournalOptionsFlow(OptionsFlowWithReload):
             options = {key: value for part in user_input.values() for key, value in part.items()}
             options[CONF_RETENTION_DAYS] = int(options[CONF_RETENTION_DAYS])
             options[CONF_MAX_ENTRIES] = int(options[CONF_MAX_ENTRIES])
+            options[CONF_STATISTICS_YEARS] = int(options[CONF_STATISTICS_YEARS])
             for key in (CONF_PANEL_TITLE, CONF_PANEL_ICON):
                 if value := str(options.pop(key, None) or "").strip():
                     options[key] = value
@@ -107,6 +111,14 @@ class NotificationJournalOptionsFlow(OptionsFlowWithReload):
                 vol.Required(CONF_MAX_ENTRIES): selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=MIN_MAX_ENTRIES, max=MAX_MAX_ENTRIES, step=1, mode=selector.NumberSelectorMode.SLIDER
+                    )
+                ),
+                vol.Required(CONF_STATISTICS_YEARS): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=MIN_STATISTICS_YEARS,
+                        max=MAX_STATISTICS_YEARS,
+                        step=1,
+                        mode=selector.NumberSelectorMode.BOX,
                     )
                 ),
             },

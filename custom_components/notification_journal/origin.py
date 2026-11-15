@@ -86,7 +86,7 @@ class OriginNames:
 
     def name(self, key: str | None, stored: str | None) -> str | None:
         """Return the current name of the origin with this key, else the stored one."""
-        if key is None:
+        if key is None or "." not in key:
             return stored
         if key not in self._names:
             self._names[key] = self._lookup(key)
