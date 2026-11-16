@@ -65,7 +65,8 @@ const DEFAULT_FILTERS: Filters = {
 const VIEW_KEY = "notification_journal.view";
 const ORDER_KEY = "notification_journal.newest_first";
 
-type Item = { day: string } | { group: string; record: NotificationRecord } | { record: NotificationRecord };
+type Item =
+  { day: string; collapsed: boolean } | { group: string; record: NotificationRecord } | { record: NotificationRecord };
 
 /** The key of an origin's group, the same as `origin_key` in the store. */
 function groupKey(record: NotificationRecord): string {
@@ -126,9 +127,8 @@ export class NotificationJournalPanel extends LitElement {
   declare _view: View;
   declare _groups: Record<string, number>;
   declare _folded: Map<string, boolean>;
-  private _folding = false;
-  private _newest: string | undefined;
-  private _newestLater = false;
+  private _open: "all" | "none" | "later" | `day-${string}` = "later";
+  private _foldedFor = "";
   declare _notice: string | undefined;
   declare _archived: boolean;
   declare _selecting: boolean;
@@ -227,7 +227,7 @@ export class NotificationJournalPanel extends LitElement {
       type: "notification_journal/subscribe",
     });
     this._unsubscribe.catch(() => (this._unsubscribe = undefined));
-    void this._load(false, true);
+    void this._load();
     void this._loadFacets();
   }
 
@@ -260,9 +260,8 @@ export class NotificationJournalPanel extends LitElement {
     return query;
   }
 
-  private async _load(more = false, refold = false): Promise<void> {
+  private async _load(more = false): Promise<void> {
     if (!this._hass) return;
-    const before = new Set(this._sections());
     const request = ++this._request;
     this._loading = true;
     try {
@@ -288,8 +287,7 @@ export class NotificationJournalPanel extends LitElement {
       }
       if (page.total !== undefined) this._total = page.total;
       if (page.groups !== undefined || !more) this._groups = page.groups ?? {};
-      if (refold) this._fold();
-      else this._openNewDays(before, more);
+      this._refold();
       this._error = undefined;
     } catch (error) {
       if (request !== this._request) return;
@@ -331,7 +329,6 @@ export class NotificationJournalPanel extends LitElement {
       this._records = this._records.map((known, position) => (position === index ? record : known));
     } else if (change === "added" && !this._archived) {
       if (this._unfiltered && this._complete) {
-        this._openNewDays(new Set(this._sections()), false, [record]);
         const first = this._records[0];
         this._records = [record, ...this._records];
         this._total += 1;
@@ -379,7 +376,7 @@ export class NotificationJournalPanel extends LitElement {
     const groups = { ...this._groups };
     for (const record of gone) if (groups[groupKey(record)]) groups[groupKey(record)] -= 1;
     this._groups = groups;
-    if (this._newest && !this._sections().includes(this._newest)) this._newest = this._newestDay();
+    this._settle();
   }
 
   private async _archive(): Promise<void> {
@@ -422,7 +419,7 @@ export class NotificationJournalPanel extends LitElement {
     this._archived = archived;
     this._endSelection();
     this.renderRoot.querySelector(".content")?.scrollTo({ top: 0 });
-    void this._load(false, true);
+    void this._load();
   }
 
   private _toggle(section: string): void {
@@ -430,59 +427,46 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private _isCollapsed(section: string): boolean {
-    return this._folded.get(section) ?? (this._folding && section !== this._newest);
+    const open = this._open;
+    return this._folded.get(section) ?? (open !== "all" && !(open.startsWith("day-") && section >= open));
   }
 
-  private _fold(): void {
-    this._folding = this._view === "time" && this._unfiltered;
-    this._newestLater = !this._filters.newestFirst && !this._complete;
-    this._newest = this._newestLater ? undefined : this._newestDay();
-    this._folded = new Map();
-  }
-
-  private _foldEvery(collapsed: boolean): void {
-    this._folding = collapsed;
-    this._newestLater = false;
-    this._newest = undefined;
-    this._folded = new Map();
+  /** Folds anew once filters, view or archive change: the plain timeline opens from its newest day, the rest all open. */
+  private _refold(): void {
+    const key = JSON.stringify([this._filters, this._view, this._archived]);
+    if (key !== this._foldedFor) {
+      this._foldedFor = key;
+      this._folded = new Map();
+      this._open = this._view === "time" && this._unfiltered ? "later" : "all";
+    }
+    this._settle();
   }
 
   /**
-   * Opens the days that arrived newer than the open one, as nothing collapses by itself. Oldest first, the newest day
-   * is known only once the last page is loaded.
+   * Opens from the newest day once it is known: oldest first, only with the last page. Days newer than the open one
+   * are open anyway, and the open day only moves back when its notifications are gone.
    */
-  private _openNewDays(before: Set<string>, more: boolean, records = this._records): void {
-    if (!this._folding || this._view !== "time") return;
-    if (more) {
-      if (this._newestLater && this._complete) {
-        this._newestLater = false;
-        this._newest = this._newestDay();
-      }
-      return;
-    }
-    const newest = this._newest;
-    if (newest === undefined) return;
-    const opened = new Map(this._folded);
-    for (const record of records) {
-      const day = `day-${dayKey(this._clock, record.time)}`;
-      if (!before.has(day) && day > newest) opened.set(day, false);
-    }
-    if (opened.size !== this._folded.size) this._folded = opened;
+  private _settle(): void {
+    const open = this._open;
+    if (open === "all" || open === "none") return;
+    if (open === "later" && !this._filters.newestFirst && !this._complete) return;
+    const newest = this._filters.newestFirst ? this._records[0] : this._records.at(-1);
+    if (!newest) return;
+    const day = `day-${dayKey(this._clock, newest.time)}` as const;
+    if (open === "later" || day < open) this._open = day;
   }
 
-  private _newestDay(): string | undefined {
-    let newest: NotificationRecord | undefined;
-    for (const record of this._records)
-      if (!newest || Date.parse(record.time) > Date.parse(newest.time)) newest = record;
-    return newest && `day-${dayKey(this._clock, newest.time)}`;
+  private _foldEvery(collapsed: boolean): void {
+    this._open = collapsed ? "none" : "all";
+    this._folded = new Map();
+  }
+
+  private _sectionKey(record: NotificationRecord): string {
+    return this._view === "origin" ? `group-${groupKey(record)}` : `day-${dayKey(this._clock, record.time)}`;
   }
 
   private _sections(): string[] {
-    const clock = this._clock;
-    const keys = this._records.map((record) =>
-      this._view === "origin" ? `group-${groupKey(record)}` : `day-${dayKey(clock, record.time)}`,
-    );
-    return [...new Set(keys)];
+    return [...new Set(this._records.map((record) => this._sectionKey(record)))];
   }
 
   private get _unfiltered(): boolean {
@@ -496,12 +480,15 @@ export class NotificationJournalPanel extends LitElement {
     this._filters = { ...this._filters, ...changes };
     if ("newestFirst" in changes) store(ORDER_KEY, String(this._filters.newestFirst));
     this.renderRoot.querySelector(".content")?.scrollTo({ top: 0 });
-    const reorderOnly = Object.keys(changes).every((key) => key === "newestFirst");
-    if (reorderOnly && this._complete && !this._loading) {
+    this._rearrange(Object.keys(changes).every((key) => key === "newestFirst"));
+  }
+
+  private _rearrange(local: boolean): void {
+    if (local && this._complete && !this._loading) {
       this._arrange();
-      this._fold();
+      this._refold();
     } else {
-      void this._load(false, true);
+      void this._load();
     }
   }
 
@@ -530,12 +517,7 @@ export class NotificationJournalPanel extends LitElement {
     this._selecting = false;
     this._selected = new Set();
     this.renderRoot.querySelector(".content")?.scrollTo({ top: 0 });
-    if (this._complete && !this._loading) {
-      this._arrange();
-      this._fold();
-    } else {
-      void this._load(false, true);
-    }
+    this._rearrange(true);
   }
 
   private _lookups(): { userNames: Map<string, string>; originIcons: Map<string, string> } {
@@ -581,7 +563,7 @@ export class NotificationJournalPanel extends LitElement {
 
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
-    const sentinel = this.renderRoot.querySelector(".sentinel");
+    const sentinel = this.renderRoot.querySelector(".sentinel.auto");
     if (!sentinel) {
       this._observer?.disconnect();
       this._observer = undefined;
@@ -590,14 +572,7 @@ export class NotificationJournalPanel extends LitElement {
     if (!this._observer) {
       this._observer = new IntersectionObserver(
         (entries) => {
-          const last = this._sections().at(-1);
-          const reading = last === undefined || !this._isCollapsed(last);
-          if (
-            entries.some((entry) => entry.isIntersecting) &&
-            reading &&
-            !this._loading &&
-            this._records.length < this._total
-          ) {
+          if (entries.some((entry) => entry.isIntersecting) && !this._loading && this._records.length < this._total) {
             void this._load(true);
           }
         },
@@ -898,13 +873,15 @@ export class NotificationJournalPanel extends LitElement {
     const byOrigin = this._view === "origin";
     const items: Item[] = [];
     let section = "";
+    let collapsed = false;
     for (const record of this._records) {
       const key = byOrigin ? groupKey(record) : dayKey(clock, record.time);
       if (key !== section) {
-        items.push(byOrigin ? { group: key, record } : { day: key });
         section = key;
+        collapsed = this._isCollapsed(byOrigin ? `group-${key}` : `day-${key}`);
+        items.push(byOrigin ? { group: key, record } : { day: key, collapsed });
       }
-      if (!this._isCollapsed(byOrigin ? `group-${key}` : `day-${key}`)) items.push({ record });
+      if (!collapsed) items.push({ record });
     }
     return html`
       ${
@@ -925,8 +902,8 @@ export class NotificationJournalPanel extends LitElement {
           (item) =>
             "day" in item
               ? html`<button
-                  class="section day ${this._isCollapsed(`day-${item.day}`) ? "collapsed" : ""}"
-                  aria-expanded=${this._isCollapsed(`day-${item.day}`) ? "false" : "true"}
+                  class="section day ${item.collapsed ? "collapsed" : ""}"
+                  aria-expanded=${item.collapsed ? "false" : "true"}
                   @click=${() => this._toggle(`day-${item.day}`)}
                 >
                   ${icon(mdiChevronDown)}<span>${dayLabel(clock, localize, item.day)}</span>
@@ -949,7 +926,7 @@ export class NotificationJournalPanel extends LitElement {
       </div>
       ${
         this._records.length < this._total
-          ? html`<div class="sentinel">
+          ? html`<div class="sentinel ${collapsed ? "" : "auto"}">
               <button class="text-button" ?disabled=${this._loading} @click=${() => this._load(true)}>
                 ${localize(this._loading ? "loading" : "load_more")}
               </button>
