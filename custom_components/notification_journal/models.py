@@ -65,6 +65,8 @@ class Origin:
     run_id: str | None = None
     user_id: str | None = None
     integration: str | None = None
+    imported: bool = False
+    """Rebuilt from the recorder on first setup: no trace, and no integration among the origins."""
 
 
 @dataclass(slots=True)

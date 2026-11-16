@@ -13,7 +13,7 @@ from homeassistant.helpers import target
 from ..models import Recipient, RecipientKind
 from ..recipients import NOTIFY_DOMAIN, entity_recipient
 from ..store import NotificationStore
-from . import ATTR_TITLE, TARGET_KEYS, as_list, new_record
+from . import ATTR_TITLE, TARGET_KEYS, Listener, as_list, async_listen, new_record
 
 TELEGRAM_DOMAIN = "telegram_bot"
 TEXT_FIELDS = {
@@ -43,9 +43,13 @@ class TelegramSource:
         self._store = store
         self._excluded = excluded_channels
 
+    def listeners(self) -> list[Listener]:
+        """The calls of the telegram_bot send actions."""
+        return [(EVENT_CALL_SERVICE, self._handle, _is_telegram)]
+
     def async_start(self) -> CALLBACK_TYPE:
         """Listen to the calls of the telegram_bot send actions."""
-        return self._hass.bus.async_listen(EVENT_CALL_SERVICE, self._handle, event_filter=_is_telegram)
+        return async_listen(self._hass, self)
 
     @callback
     def _handle(self, event: Event) -> None:

@@ -238,6 +238,8 @@ class NotificationStore:
         self._resume = threading.Event()
         self._listeners: list[Callable[[str, str], None]] = []
         self._loop: asyncio.AbstractEventLoop | None = None
+        self.created = False
+        """Whether opening the store created the database, as on first setup."""
 
     async def async_open(self) -> None:
         """Open the database and create the schema."""
@@ -287,7 +289,7 @@ class NotificationStore:
         self._submit(self._update_status, record_id, status, time, by, notify=("updated", record_id))
 
     async def async_add_answer(self, source: str, answer: Answer) -> str | None:
-        """Attach an answer to the latest record of a source that offered its button; return that record's id.
+        """Attach an answer to the latest record of a source sent before it that offered its button; return its id.
 
         A record that reached the user who answered comes first; an action ID used by several
         notifications belongs to the most recent one.
@@ -413,6 +415,7 @@ class NotificationStore:
         if connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'notifications'").fetchone() is None:
             connection.executescript(SCHEMA)
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self.created = True
             return
         if version > SCHEMA_VERSION:
             raise NewerSchemaError(
@@ -517,18 +520,19 @@ class NotificationStore:
     def _add_answer(self, source: str, answer: Answer) -> str | None:
         db = self._db()
         offered = (
-            "SELECT rowid, id FROM notifications WHERE source = ? AND EXISTS "
+            "SELECT rowid, id FROM notifications WHERE source = ? AND time <= ? AND EXISTS "
             "(SELECT 1 FROM json_each(data, '$.data.actions') WHERE json_extract(value, '$.action') = ?)"
         )
+        sent = answer.time.timestamp()
         newest = " ORDER BY time DESC, rowid DESC LIMIT 1"
         row = None
         if answer.user_id is not None:
             row = db.execute(
                 f"{offered} AND rowid IN (SELECT notification FROM notification_users WHERE user_id = ?){newest}",
-                (source, answer.action, answer.user_id),
+                (source, sent, answer.action, answer.user_id),
             ).fetchone()
         if row is None:
-            row = db.execute(offered + newest, (source, answer.action)).fetchone()
+            row = db.execute(offered + newest, (source, sent, answer.action)).fetchone()
         if row is None:
             return None
         with db:

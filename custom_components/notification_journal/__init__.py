@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
@@ -12,6 +14,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_EXCLUDED_CHANNELS,
@@ -32,8 +35,10 @@ from .const import (
     SIGNAL_CHANGED,
     Visibility,
 )
+from .importer import async_import
 from .panel import async_register_frontend, async_register_panel, async_remove_panel
 from .recipients import qualify_channel
+from .sources import EventSource
 from .sources.notify import NotifySource
 from .sources.persistent import PersistentNotificationSource
 from .sources.speech import SpeechSource
@@ -75,7 +80,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
         raise ConfigEntryError(str(err)) from err
     runtime = RuntimeData(store=store)
     try:
-        _start(hass, entry, store, runtime.stop, options)
+        sources = _start(hass, entry, store, runtime.stop, options)
         if options[CONF_RECORD_PERSISTENT]:
             runtime.stop.append(await PersistentNotificationSource(hass, store).async_start())
     except Exception:
@@ -83,6 +88,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
         await store.async_close()
         raise
     entry.runtime_data = runtime
+    if store.created:
+        entry.async_create_background_task(
+            hass, async_import(hass, sources, dt_util.utcnow()), "notification_journal recorder import"
+        )
 
     async_register_panel(
         hass,
@@ -102,14 +111,27 @@ async def async_unload_entry(hass: HomeAssistant, entry: NotificationJournalConf
     return True
 
 
+async def async_remove_entry(hass: HomeAssistant, entry: NotificationJournalConfigEntry) -> None:
+    """Remove the journal with the integration, so a new setup starts empty and imports from the recorder again."""
+    await hass.async_add_executor_job(_remove_database, Path(hass.config.path(DATABASE_FILE)))
+
+
+def _remove_database(database: Path) -> None:
+    """Delete the database, its WAL and SHM files and the copies made before migrations."""
+    own = re.compile(rf"{re.escape(database.name)}(-wal|-shm|\.bak-v\d+)?")
+    for path in database.parent.iterdir():
+        if own.fullmatch(path.name):
+            path.unlink(missing_ok=True)
+
+
 def _start(
     hass: HomeAssistant,
     entry: NotificationJournalConfigEntry,
     store: NotificationStore,
     stop: list[CALLBACK_TYPE],
     options: dict,
-) -> None:
-    """Start the purge, the forwarding of changes to subscribers and the event sources."""
+) -> list[EventSource]:
+    """Start the purge, the forwarding of changes to subscribers and the event sources; return the sources."""
     retention_days = int(options[CONF_RETENTION_DAYS])
     max_entries = int(options[CONF_MAX_ENTRIES])
     statistics_years = int(options[CONF_STATISTICS_YEARS])
@@ -139,13 +161,17 @@ def _start(
     _purge()
     stop.append(async_track_time_interval(hass, _purge, PURGE_INTERVAL))
     excluded = {qualify_channel(channel) for channel in options[CONF_EXCLUDED_CHANNELS]}
+    sources: list[EventSource] = []
     for option, source in (
         (CONF_RECORD_NOTIFY, NotifySource),
         (CONF_RECORD_SPEECH, SpeechSource),
         (CONF_RECORD_TELEGRAM, TelegramSource),
     ):
         if options[option]:
-            stop.append(source(hass, store, excluded_channels=excluded).async_start())
+            sources.append(source(hass, store, excluded_channels=excluded))
+    for started in sources:
+        stop.append(started.async_start())
+    return sources
 
 
 def _stop(runtime: RuntimeData) -> None:

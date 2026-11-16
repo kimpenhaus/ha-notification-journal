@@ -61,6 +61,8 @@ const en = {
   source: "Source",
   time: "Time",
   context: "Context",
+  recorded: "Recorded",
+  imported: "Imported from the recorder on setup; without a trace, and an integration that sent it shows as unknown",
   untitled: "Notification",
   untitled_speech: "Announcement",
   archive_view: "Active or archived",
@@ -191,6 +193,9 @@ const de: Record<Key, string> = {
   source: "Quelle",
   time: "Zeit",
   context: "Kontext",
+  recorded: "Aufgezeichnet",
+  imported:
+    "Bei der Einrichtung aus dem Recorder importiert; ohne Trace, und eine sendende Integration erscheint als unbekannt",
   untitled: "Benachrichtigung",
   untitled_speech: "Ansage",
   archive_view: "Aktiv oder archiviert",

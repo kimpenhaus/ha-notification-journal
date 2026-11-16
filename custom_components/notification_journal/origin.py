@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextvars import ContextVar
+
 from homeassistant.components.persistent_notification import DOMAIN as PN_DOMAIN
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -17,6 +20,11 @@ KIND_KEYS = frozenset(kind.value for kind in OriginKind)
 NOT_CALLERS = {DOMAIN, PN_DOMAIN}
 """Integrations on the stack that only pass a notification on: this one, and the bell reporting a change."""
 
+replayed_origin: ContextVar[Callable[[Context], Origin] | None] = ContextVar(
+    "notification_journal_replayed_origin", default=None
+)
+"""Set while events from the recorder are replayed: their origin comes from the recorded contexts instead."""
+
 
 def resolve_origin(hass: HomeAssistant, context: Context) -> Origin:
     """Return the origin of a service call that is running right now.
@@ -26,6 +34,8 @@ def resolve_origin(hass: HomeAssistant, context: Context) -> Origin:
     group makes for its members. Those listeners run inside the call, so without an automation,
     script or user the call stack still holds the integration that made it.
     """
+    if (replayed := replayed_origin.get()) is not None:
+        return replayed(context)
     if (trace_id := trace_id_get()) is not None:
         key, run_id = trace_id
         domain, _, item_id = key.partition(".")

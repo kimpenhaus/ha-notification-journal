@@ -18,6 +18,8 @@ export interface Origin {
   run_id: string | null;
   user_id: string | null;
   integration?: string | null;
+  /** Rebuilt from the recorder on first setup. */
+  imported?: boolean;
 }
 
 export interface Answer {

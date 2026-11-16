@@ -11,7 +11,7 @@ from homeassistant.helpers import target
 from ..models import RecipientKind
 from ..recipients import entity_group_members, entity_recipient
 from ..store import NotificationStore
-from . import ATTR_MESSAGE, TARGET_KEYS, as_list, new_record
+from . import ATTR_MESSAGE, TARGET_KEYS, Listener, as_list, async_listen, new_record
 
 TTS_DOMAIN = "tts"
 SATELLITE_DOMAIN = "assist_satellite"
@@ -31,9 +31,13 @@ class SpeechSource:
         self._store = store
         self._excluded = excluded_channels
 
+    def listeners(self) -> list[Listener]:
+        """The calls of tts.speak and assist_satellite.announce."""
+        return [(EVENT_CALL_SERVICE, self._handle, _is_speech)]
+
     def async_start(self) -> CALLBACK_TYPE:
         """Listen to the calls of tts.speak and assist_satellite.announce."""
-        return self._hass.bus.async_listen(EVENT_CALL_SERVICE, self._handle, event_filter=_is_speech)
+        return async_listen(self._hass, self)
 
     @callback
     def _handle(self, event: Event) -> None:
