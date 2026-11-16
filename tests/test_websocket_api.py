@@ -2,8 +2,8 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime, time, timedelta
-from zoneinfo import ZoneInfo
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from homeassistant.auth.models import User
 from homeassistant.core import HomeAssistant
@@ -193,6 +193,26 @@ async def test_user_sees_only_own_notifications(
     assert (await _call(client, type=f"{DOMAIN}/get", record_id="reader"))["success"]
     other = await _call(client, type=f"{DOMAIN}/get", record_id="admin")
     assert other["error"]["code"] == "not_found"
+
+
+async def test_days_count_only_what_the_user_sees(
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    hass_admin_user: User,
+    hass_read_only_user: User,
+    hass_read_only_access_token: str,
+) -> None:
+    runtime = await _setup(hass)
+    await _fill(runtime, hass_admin_user, hass_read_only_user)
+    client = await hass_ws_client(hass, hass_read_only_access_token)
+    await _call(client, type=f"{DOMAIN}/archive", record_ids=["family"], archived=True)
+
+    active = (await _call(client, type=f"{DOMAIN}/list", days=True))["result"]
+    archived = (await _call(client, type=f"{DOMAIN}/list", days=True, archived=True))["result"]
+
+    assert [r["id"] for r in active["records"]] == ["reader"]
+    assert sum(day["count"] for day in active["days"]) == active["total"] == 1
+    assert sum(day["count"] for day in archived["days"]) == archived["total"] == 1
 
 
 async def test_non_admins_see_nothing_when_configured(

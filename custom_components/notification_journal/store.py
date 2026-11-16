@@ -37,6 +37,7 @@ from .origin import origin_key
 from .statistics import (
     ALL,
     COUNTS_SCHEMA,
+    SLOT,
     UPSERT_COUNTS,
     contributions,
     counts_of,
@@ -251,6 +252,41 @@ class Page:
     groups: dict[str, int] | None = None
     days: list[tuple[date, int]] | None = None
     """The days that hold matches and how many each, in the order of the list."""
+
+
+def _where(query: Query) -> tuple[str, list[Any]]:
+    """Return the WHERE clause of a query's filters and its parameters."""
+    where: list[str] = []
+    params: list[Any] = []
+    if query.user_id is not None:
+        where.append(VISIBLE_TO_USER)
+        params.append(query.user_id)
+    if query.archive_user_id is not None:
+        archived = "IN" if query.archived else "NOT IN"
+        where.append(f"rowid {archived} (SELECT notification FROM notification_archive WHERE user_id = ?)")
+        params.append(query.archive_user_id)
+    if query.text and (match := _fts_query(query.text)):
+        where.append("rowid IN (SELECT rowid FROM notifications_fts WHERE notifications_fts MATCH ?)")
+        params.append(match)
+    if query.channel:
+        where.append("(channel = ? OR grp = ?)")
+        params.extend([query.channel, query.channel])
+    if query.origin:
+        where.append("origin_key = ?")
+        params.append(query.origin)
+    if query.status is not None:
+        where.append("status = ?")
+        params.append(query.status.value)
+    if query.tag:
+        where.append("json_extract(data, '$.data.tag') = ?")
+        params.append(query.tag)
+    if query.since is not None:
+        where.append("time >= ?")
+        params.append(query.since.timestamp())
+    if query.until is not None:
+        where.append("time < ?")
+        params.append(query.until.timestamp())
+    return (f"WHERE {' AND '.join(where)}" if where else ""), params
 
 
 def _fts_query(text: str) -> str | None:
@@ -676,50 +712,16 @@ class NotificationStore:
         return None if row is None else self._from_row(row)
 
     def _query(self, query: Query) -> Page:
-        where: list[str] = []
-        params: list[Any] = []
-        if query.user_id is not None:
-            where.append(VISIBLE_TO_USER)
-            params.append(query.user_id)
-        if query.archive_user_id is not None:
-            archived = "IN" if query.archived else "NOT IN"
-            where.append(f"rowid {archived} (SELECT notification FROM notification_archive WHERE user_id = ?)")
-            params.append(query.archive_user_id)
-        if query.text and (match := _fts_query(query.text)):
-            where.append("rowid IN (SELECT rowid FROM notifications_fts WHERE notifications_fts MATCH ?)")
-            params.append(match)
-        if query.channel:
-            where.append("(channel = ? OR grp = ?)")
-            params.extend([query.channel, query.channel])
-        if query.origin:
-            where.append("origin_key = ?")
-            params.append(query.origin)
-        if query.status is not None:
-            where.append("status = ?")
-            params.append(query.status.value)
-        if query.tag:
-            where.append("json_extract(data, '$.data.tag') = ?")
-            params.append(query.tag)
-        if query.since is not None:
-            where.append("time >= ?")
-            params.append(query.since.timestamp())
-        if query.until is not None:
-            where.append("time < ?")
-            params.append(query.until.timestamp())
-        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        clause, params = _where(query)
         order = "DESC" if query.newest_first else "ASC"
         db = self._db()
-        total = None
-        if query.with_counts:
-            total = db.execute(f"SELECT count(*) FROM notifications {clause}", params).fetchone()[0]
-        groups = days = None
+        total = days = None
         if query.with_counts and query.days_in is not None:
-            zone = query.days_in
-            counted = Counter(
-                datetime.fromtimestamp(stamp, zone).date()
-                for (stamp,) in db.execute(f"SELECT time FROM notifications {clause}", params)
-            )
-            days = sorted(counted.items(), reverse=query.newest_first)
+            days = self._days(clause, params, query.days_in, query.newest_first)
+            total = sum(count for _, count in days)
+        elif query.with_counts:
+            total = db.execute(f"SELECT count(*) FROM notifications {clause}", params).fetchone()[0]
+        groups = None
         sort = f"time {order}, rowid {order}"
         if query.group_by_origin:
             if query.with_counts:
@@ -734,6 +736,17 @@ class NotificationStore:
             [*params, query.limit, query.offset],
         ).fetchall()
         return Page(records=[self._from_row(row) for row in rows], total=total, groups=groups, days=days)
+
+    def _days(self, clause: str, params: list[Any], zone: tzinfo, newest_first: bool) -> list[tuple[date, int]]:
+        """Count the matches per local day; every time zone is a whole number of quarter hours from UTC, so the
+        quarter hours counted in SQL each fall within one local day."""
+        counted: Counter[date] = Counter()
+        slots = self._db().execute(
+            f"SELECT CAST(time / {SLOT} AS INTEGER), count(*) FROM notifications {clause} GROUP BY 1", params
+        )
+        for slot, count in slots:
+            counted[datetime.fromtimestamp(slot * SLOT, zone).date()] += count
+        return sorted(counted.items(), reverse=newest_first)
 
     def _forget_imported(self) -> None:
         db = self._db()
