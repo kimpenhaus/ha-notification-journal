@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.0](https://github.com/kimpenhaus/ha-notification-journal/compare/v0.2.0...v0.3.0) (2026-11-16)
+
+
+### Features
+
+* list every day of the timeline, load a day when it opens ([#66](https://github.com/kimpenhaus/ha-notification-journal/issues/66)) ([1383f2f](https://github.com/kimpenhaus/ha-notification-journal/commit/1383f2fa5363d3d5dd579a2c9f5b455f0d9f5513))
+* open an image in an overlay ([#64](https://github.com/kimpenhaus/ha-notification-journal/issues/64)) ([208887b](https://github.com/kimpenhaus/ha-notification-journal/commit/208887b94d002194d2aabd5f2a35af3628c80f25))
+* open the timeline with only the newest day expanded ([#62](https://github.com/kimpenhaus/ha-notification-journal/issues/62)) ([01c3885](https://github.com/kimpenhaus/ha-notification-journal/commit/01c38855550f9d08ca81b5b59344f37b34f5df8e))
+* show the media and the tag of a notification ([#60](https://github.com/kimpenhaus/ha-notification-journal/issues/60)) ([5cc9e43](https://github.com/kimpenhaus/ha-notification-journal/commit/5cc9e43108e16c45fc5869b6cb5243dc32e8eb52))
+
 ## [0.2.0](https://github.com/kimpenhaus/ha-notification-journal/compare/v0.1.0...v0.2.0) (2026-11-16)
 
 
