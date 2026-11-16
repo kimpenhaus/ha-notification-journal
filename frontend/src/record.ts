@@ -1,4 +1,4 @@
-import { css, html, LitElement, nothing, type TemplateResult } from "lit";
+import { css, html, LitElement, nothing, type PropertyValues, type TemplateResult } from "lit";
 
 import { channelLabel, type Clock, dateTimeText, dayKey, initials, shortDateTimeText, timeText } from "./format";
 import {
@@ -19,16 +19,22 @@ import {
   mdiCheckCircle,
   mdiHelpCircleOutline,
   mdiHomeAssistant,
+  mdiImageOffOutline,
   mdiOpenInNew,
+  mdiPlay,
   mdiPuzzleOutline,
   mdiRobotOutline,
   mdiScriptTextOutline,
   mdiSendCheckOutline,
   mdiSpeaker,
   mdiSwapHorizontal,
+  mdiTagOutline,
+  mdiVideoOutline,
+  mdiVolumeHigh,
 } from "./icons";
 import { countText, type Localize } from "./localize";
 import { followInternal, inline } from "./markdown";
+import { appData, fileName, notificationMedia, notificationTag } from "./media";
 import { surface } from "./styles";
 import type { Answer, NotificationRecord, Origin, OriginKind, Recipient, Status } from "./types";
 
@@ -98,8 +104,7 @@ interface Button {
 
 /** The buttons a notification offered in the Companion app (`data.actions`). */
 function offeredButtons(record: NotificationRecord): Button[] {
-  const inner = record.data?.["data"];
-  const actions = inner && typeof inner === "object" ? (inner as Record<string, unknown>)["actions"] : undefined;
+  const actions = appData(record).actions;
   if (!Array.isArray(actions)) return [];
   return actions.flatMap((item) => {
     if (!item || typeof item !== "object") return [];
@@ -124,6 +129,19 @@ export function recipientChip(recipient: Recipient): TemplateResult {
   return html`<span class="chip recipient ${recipient.kind}" title=${recipient.id}>${avatar}${recipient.name}</span>`;
 }
 
+/** Loads the first frame of a video only once its card comes near the screen. */
+const frames = new IntersectionObserver(
+  (entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const video = entry.target as HTMLVideoElement;
+      frames.unobserve(video);
+      if (video.dataset.src) video.src = video.dataset.src;
+    }
+  },
+  { rootMargin: "300px" },
+);
+
 export class NotificationJournalRecord extends LitElement {
   static override properties = {
     record: { attribute: false },
@@ -135,6 +153,8 @@ export class NotificationJournalRecord extends LitElement {
     showDate: { type: Boolean },
     _details: { state: true },
     _calls: { state: true },
+    _playing: { state: true },
+    _failed: { state: true },
     selectable: { type: Boolean },
     selected: { type: Boolean },
   };
@@ -148,6 +168,8 @@ export class NotificationJournalRecord extends LitElement {
   declare showDate: boolean;
   declare _details: boolean;
   declare _calls: boolean;
+  declare _playing: boolean;
+  declare _failed: ReadonlySet<string>;
   declare selectable: boolean;
   declare selected: boolean;
 
@@ -159,6 +181,8 @@ export class NotificationJournalRecord extends LitElement {
     this.showDate = false;
     this._details = false;
     this._calls = false;
+    this._playing = false;
+    this._failed = new Set();
     this.selectable = false;
     this.selected = false;
   }
@@ -213,8 +237,8 @@ export class NotificationJournalRecord extends LitElement {
           <div class="indent">
             ${this._message()} ${this._statusNote(statusText)}
             ${record.error ? html`<p class="error">${icon(mdiAlertCircleOutline)}${record.error}</p>` : nothing}
-            ${this._buttons()}
-            <div class="chips">${this._origin()} ${this._route()}</div>
+            ${this._media()} ${this._buttons()}
+            <div class="chips">${this._origin()} ${this._route()} ${this._tag()}</div>
             ${this._calls ? this._innerCalls() : nothing} ${this._details ? this._detailList() : nothing}
           </div>
           <button
@@ -227,6 +251,87 @@ export class NotificationJournalRecord extends LitElement {
         </div>
       </article>
     `;
+  }
+
+  protected override updated(changed: PropertyValues): void {
+    super.updated(changed);
+    for (const video of this.renderRoot.querySelectorAll<HTMLVideoElement>("video.frame:not([src])")) {
+      frames.observe(video);
+    }
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    for (const video of this.renderRoot.querySelectorAll("video.frame")) frames.unobserve(video);
+  }
+
+  private _fail(address: string): void {
+    this._failed = new Set([...this._failed, address]);
+  }
+
+  /** An image, or a video with its first frame or the image as preview; a link for audio and what cannot load. */
+  private _media(): TemplateResult | typeof nothing {
+    const { image, video, audio } = notificationMedia(this.record);
+    if (!image && !video && !audio) return nothing;
+    const localize = this.localize;
+    const link = (address: string, glyph: string, label: string, unavailable = false) =>
+      html`<a class="media-link" href=${address} target="_blank" rel="noopener noreferrer"
+        >${icon(glyph)}${label}<span class="media-name"
+          >· ${unavailable ? `${localize("media_unavailable")} · ` : ""}${fileName(address)}</span
+        ></a
+      >`;
+    let visual: TemplateResult | typeof nothing = nothing;
+    if (video && this._playing) {
+      visual = html`<video class="player" src=${video} controls autoplay playsinline></video>`;
+    } else if (video) {
+      const poster = image && !this._failed.has(image) ? image : undefined;
+      visual =
+        this._failed.has(video) && !poster
+          ? link(video, mdiVideoOutline, localize("play_video"), true)
+          : html`<button class="preview video" title=${localize("play_video")} @click=${() => (this._playing = true)}>
+              ${
+                poster
+                  ? html`<img src=${poster} alt="" loading="lazy" @error=${() => this._fail(poster)} />`
+                  : html`<video
+                      class="frame"
+                      data-src="${video}#t=0.1"
+                      preload="metadata"
+                      muted
+                      playsinline
+                      @error=${() => this._fail(video)}
+                    ></video>`
+              }
+              <span class="play">${icon(mdiPlay)}</span>
+              <span class="caption">${fileName(video)}</span>
+            </button>`;
+    } else if (image) {
+      visual = this._failed.has(image)
+        ? link(image, mdiImageOffOutline, localize("open_image"), true)
+        : html`<a
+            class="preview"
+            href=${image}
+            target="_blank"
+            rel="noopener noreferrer"
+            title=${localize("open_image")}
+            ><img src=${image} alt="" loading="lazy" @error=${() => this._fail(image)}
+          /></a>`;
+    }
+    return html`<div class="media">
+      ${visual} ${audio ? link(audio, mdiVolumeHigh, localize("play_audio")) : nothing}
+    </div>`;
+  }
+
+  private _tag(): TemplateResult | typeof nothing {
+    const tag = notificationTag(this.record);
+    if (!tag) return nothing;
+    return html`<button
+      class="chip tag"
+      title=${this.localize("filter_by_tag")}
+      @click=${() =>
+        this.dispatchEvent(new CustomEvent("notification-tag", { detail: { tag }, bubbles: true, composed: true }))}
+    >
+      ${icon(mdiTagOutline)}${tag}
+    </button>`;
   }
 
   private _clicked(event: MouseEvent): void {
@@ -675,6 +780,108 @@ export class NotificationJournalRecord extends LitElement {
     }
     .chips.recipients {
       margin-top: 8px;
+    }
+    .chip.tag {
+      color: var(--secondary-text-color);
+      cursor: pointer;
+    }
+    .chip.tag:hover {
+      background: color-mix(in srgb, var(--primary-color) 8%, transparent);
+    }
+    .chip.tag .icon {
+      width: 16px;
+      height: 16px;
+    }
+    .media {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 6px;
+      margin-top: 12px;
+    }
+    .preview,
+    .player {
+      display: block;
+      position: relative;
+      width: min(100%, 420px);
+      box-sizing: border-box;
+      padding: 0;
+      overflow: hidden;
+      border: 1px solid var(--divider-color);
+      border-radius: var(--ha-card-border-radius, 12px);
+      background: var(--secondary-background-color);
+      font: inherit;
+      cursor: zoom-in;
+    }
+    .preview img,
+    .preview video {
+      display: block;
+      width: 100%;
+      max-height: 220px;
+      object-fit: cover;
+    }
+    .preview video {
+      aspect-ratio: 16 / 9;
+    }
+    .preview.video {
+      cursor: pointer;
+    }
+    .player {
+      max-height: 320px;
+      cursor: auto;
+    }
+    .play {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      display: grid;
+      place-items: center;
+      width: 52px;
+      height: 52px;
+      margin: -26px 0 0 -26px;
+      border-radius: 50%;
+      color: var(--text-primary-color);
+      background: color-mix(in srgb, var(--primary-color) 85%, transparent);
+    }
+    .play .icon {
+      width: 30px;
+      height: 30px;
+    }
+    .caption {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      padding: 4px 10px;
+      overflow: hidden;
+      font-size: 0.8rem;
+      text-align: left;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--primary-text-color);
+      background: color-mix(in srgb, var(--card-background-color) 75%, transparent);
+    }
+    .media-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+      min-height: 28px;
+      box-sizing: border-box;
+      padding: 2px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--divider-color);
+      color: var(--primary-color);
+      font-size: 0.85rem;
+      text-decoration: none;
+      overflow-wrap: anywhere;
+    }
+    .media-link .icon {
+      width: 18px;
+      height: 18px;
+    }
+    .media-name {
+      color: var(--secondary-text-color);
     }
     .chip {
       display: inline-flex;

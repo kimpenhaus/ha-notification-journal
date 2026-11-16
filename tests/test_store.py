@@ -129,13 +129,16 @@ async def test_full_text_search(store: NotificationStore) -> None:
 
 
 async def test_filters(store: NotificationStore) -> None:
-    store.add(_record("a", "x", [ANNA], channel="notify.phone_anna", age=timedelta(days=2)))
+    store.add(
+        _record("a", "x", [ANNA], channel="notify.phone_anna", age=timedelta(days=2), data={"data": {"tag": "door"}})
+    )
     store.add(_record("b", "x", [ANNA], group="notify.family", channel="notify.family", status=Status.FAILED))
     store.add(_record("c", "x", [BEN], origin=Origin(kind=OriginKind.SCRIPT, entity_id="script.night")))
 
     assert await _ids(store, channel="notify.family") == ["b"]
     assert await _ids(store, status=Status.FAILED) == ["b"]
     assert await _ids(store, origin="script.night") == ["c"]
+    assert await _ids(store, tag="door") == ["a"]
     assert await _ids(store, origin="automation.garage") == ["b", "a"]
     assert set(await _ids(store, since=dt_util.utcnow() - timedelta(days=1))) == {"b", "c"}
     assert await _ids(store, until=dt_util.utcnow() - timedelta(days=1)) == ["a"]

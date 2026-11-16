@@ -108,6 +108,18 @@ async def test_admin_lists_everything_with_filters(
     assert [r["id"] for r in oldest["result"]["records"]] == ["reader"]
 
 
+async def test_list_by_tag(hass: HomeAssistant, hass_ws_client: WebSocketGenerator, hass_admin_user: User) -> None:
+    runtime = await _setup(hass)
+    anna = [_person(hass_admin_user, "Anna")]
+    runtime.store.add(_record("ring", "Ring", anna, data={"data": {"tag": "doorbell_ring"}}))
+    runtime.store.add(_record("other", "Other", anna, data={"data": {"tag": "laundry"}}))
+    await runtime.store.async_flush()
+
+    result = (await _call(await hass_ws_client(hass), type=f"{DOMAIN}/list", tag="doorbell_ring"))["result"]
+
+    assert [r["id"] for r in result["records"]] == ["ring"]
+
+
 async def test_record_carries_exact_trace_path(
     hass: HomeAssistant, hass_ws_client: WebSocketGenerator, hass_admin_user: User, hass_read_only_user: User
 ) -> None:

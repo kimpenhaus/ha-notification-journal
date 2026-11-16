@@ -24,6 +24,7 @@ import {
   mdiSelectRemove,
   mdiSortClockAscendingOutline,
   mdiSortClockDescendingOutline,
+  mdiTagOutline,
   mdiUnfoldLessHorizontal,
   mdiUnfoldMoreHorizontal,
 } from "./icons";
@@ -56,6 +57,7 @@ const DEFAULT_FILTERS: Filters = {
   text: "",
   status: "",
   origin: "",
+  tag: "",
   period: "",
   newestFirst: true,
 };
@@ -240,6 +242,7 @@ export class NotificationJournalPanel extends LitElement {
     if (filters.text.trim()) query.text = filters.text.trim();
     if (filters.status) query.status = filters.status;
     if (filters.origin) query.origin = filters.origin;
+    if (filters.tag) query.tag = filters.tag;
     if (this._archived) query.archived = true;
     if (this._view === "origin") query.group_by = "origin";
     if (typeof filters.period === "object") {
@@ -428,7 +431,7 @@ export class NotificationJournalPanel extends LitElement {
 
   private get _unfiltered(): boolean {
     const filters = this._filters;
-    return !filters.text.trim() && !filters.status && !filters.origin && !filters.period;
+    return !filters.text.trim() && !filters.status && !filters.origin && !filters.tag && !filters.period;
   }
 
   private _set(changes: Partial<Filters>): void {
@@ -716,6 +719,17 @@ export class NotificationJournalPanel extends LitElement {
                   </option>`,
               )}`,
           )}
+          ${
+            filters.tag
+              ? html`<button
+                  class="tag-filter"
+                  title=${localize("remove_tag_filter")}
+                  @click=${() => this._set({ tag: "" })}
+                >
+                  ${icon(mdiTagOutline)}<span>${filters.tag}</span>${icon(mdiClose)}
+                </button>`
+              : nothing
+          }
         </div>
         <div class="options">
           <div class="view" role="group" aria-label=${localize("archive_view")}>
@@ -831,6 +845,7 @@ export class NotificationJournalPanel extends LitElement {
       <div
         class="list ${this._loading ? "busy" : ""}"
         @notification-select=${(event: CustomEvent<{ id: string }>) => this._select(event.detail.id)}
+        @notification-tag=${(event: CustomEvent<{ tag: string }>) => this._set({ tag: event.detail.tag })}
       >
         ${repeat(
           items,
@@ -1015,6 +1030,31 @@ export class NotificationJournalPanel extends LitElement {
     .select.active select {
       border-color: var(--primary-color);
       background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
+    }
+    .tag-filter {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 34px;
+      max-width: 220px;
+      padding: 0 10px;
+      border-radius: 17px;
+      border: 1px solid var(--primary-color);
+      background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
+      color: var(--primary-text-color);
+      font: inherit;
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+    .tag-filter span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tag-filter .icon {
+      width: 18px;
+      height: 18px;
+      color: var(--secondary-text-color);
     }
     option,
     optgroup {

@@ -29,11 +29,13 @@ export {
   mdiFlashOutline,
   mdiHelpCircleOutline,
   mdiHomeAssistant,
+  mdiImageOffOutline,
   mdiInboxOutline,
   mdiMagnify,
   mdiMenu,
   mdiMessageBadgeOutline,
   mdiOpenInNew,
+  mdiPlay,
   mdiPuzzleOutline,
   mdiRefresh,
   mdiRobotOutline,
@@ -45,8 +47,11 @@ export {
   mdiSortClockDescendingOutline,
   mdiSpeaker,
   mdiSwapHorizontal,
+  mdiTagOutline,
   mdiUnfoldLessHorizontal,
   mdiUnfoldMoreHorizontal,
+  mdiVideoOutline,
+  mdiVolumeHigh,
 } from "@mdi/js";
 
 export function icon(path: string, label?: string): TemplateResult {

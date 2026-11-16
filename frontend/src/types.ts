@@ -84,6 +84,8 @@ export interface Filters {
   text: string;
   status: Status | "";
   origin: string;
+  /** The Companion app's tag, chosen by clicking it on a card. */
+  tag: string;
   /** A time back from now, or a fixed span opened from the statistics. */
   period: Period | TimeRange;
   newestFirst: boolean;

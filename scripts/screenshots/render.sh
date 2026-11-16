@@ -9,4 +9,4 @@ docker run --rm --log-driver none --ipc=host \
   -v "$PWD/custom_components/notification_journal/frontend/panel.js:/src-panel/panel.js:ro" \
   -v "$PWD/docs/screenshots:/work/out" \
   mcr.microsoft.com/playwright:v1.65.0-noble \
-  sh -c 'cd /work && cp /src/readme.html /src/readme-data.js /src/render.mjs /src-panel/panel.js . && npm i -s --no-audit --no-fund playwright@1.65.0 >/dev/null && node render.mjs'
+  sh -c 'cd /work && cp /src/readme.html /src/readme-data.js /src/render.mjs /src/*.svg /src-panel/panel.js . && npm i -s --no-audit --no-fund playwright@1.65.0 >/dev/null && node render.mjs'

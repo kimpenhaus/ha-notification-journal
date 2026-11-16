@@ -15,13 +15,19 @@ export function followInternal(event: MouseEvent): void {
   navigate(href);
 }
 
+/** Whether an address from a notification is a path on this Home Assistant. */
+export function isInternal(href: string): boolean {
+  return href.startsWith("/") && !href.startsWith("//");
+}
+
+/** An address from a notification the panel may open or load: a path on this Home Assistant or http(s). */
+export function safeUrl(href: unknown): string | undefined {
+  return typeof href === "string" && (isInternal(href) || /^https?:\/\//i.test(href)) ? href : undefined;
+}
+
 function link(label: string, href: string): TemplateResult | string {
-  if (href.startsWith("/") && !href.startsWith("//")) {
-    return html`<a href=${href} @click=${followInternal}>${inline(label)}</a>`;
-  }
-  if (/^https?:\/\//i.test(href)) {
-    return html`<a href=${href} target="_blank" rel="noopener noreferrer">${inline(label)}</a>`;
-  }
+  if (isInternal(href)) return html`<a href=${href} @click=${followInternal}>${inline(label)}</a>`;
+  if (safeUrl(href)) return html`<a href=${href} target="_blank" rel="noopener noreferrer">${inline(label)}</a>`;
   return label;
 }
 
