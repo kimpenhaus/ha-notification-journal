@@ -18,6 +18,7 @@ import {
   mdiChevronDown,
   mdiCheckboxBlankCircleOutline,
   mdiCheckCircle,
+  mdiClose,
   mdiHelpCircleOutline,
   mdiHomeAssistant,
   mdiImageOffOutline,
@@ -152,6 +153,7 @@ export class NotificationJournalRecord extends LitElement {
     _details: { state: true },
     _calls: { state: true },
     _playing: { state: true },
+    _viewing: { state: true },
     _failed: { state: true },
     _sources: { state: true },
     sign: { attribute: false },
@@ -169,6 +171,7 @@ export class NotificationJournalRecord extends LitElement {
   declare _details: boolean;
   declare _calls: boolean;
   declare _playing: boolean;
+  declare _viewing: boolean;
   declare _failed: ReadonlySet<string>;
   declare _sources: ReadonlyMap<string, string>;
   declare sign: Signer | undefined;
@@ -186,6 +189,7 @@ export class NotificationJournalRecord extends LitElement {
     this._details = false;
     this._calls = false;
     this._playing = false;
+    this._viewing = false;
     this._failed = new Set();
     this._sources = new Map();
     this.selectable = false;
@@ -274,6 +278,12 @@ export class NotificationJournalRecord extends LitElement {
     }
   }
 
+  protected override updated(changed: PropertyValues): void {
+    super.updated(changed);
+    const viewer = this.renderRoot.querySelector<HTMLDialogElement>("dialog.viewer");
+    if (viewer && !viewer.open) viewer.showModal();
+  }
+
   private _fail(address: string): void {
     this._failed = new Set([...this._failed, address]);
   }
@@ -344,13 +354,50 @@ export class NotificationJournalRecord extends LitElement {
     const source = this._sources.get(address);
     if (!source) return nothing;
     return html`<a
-      class="preview"
-      href=${source}
-      target="_blank"
-      rel="noopener noreferrer"
-      title=${this.localize("open_image")}
-      ><img src=${source} alt="" loading="lazy" @error=${() => this._fail(address)}
-    /></a>`;
+        class="preview"
+        href=${source}
+        target="_blank"
+        rel="noopener noreferrer"
+        title=${this.localize("open_image")}
+        @click=${(event: MouseEvent) => {
+          if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return;
+          event.preventDefault();
+          this._viewing = true;
+        }}
+        ><img src=${source} alt="" loading="lazy" @error=${() => this._fail(address)} /></a
+      >${this._viewing ? this._viewer(address, source) : nothing}`;
+  }
+
+  /** The image in full size above the panel; closes with Esc, a click beside it or the close button. */
+  private _viewer(address: string, source: string): TemplateResult {
+    const localize = this.localize;
+    return html`<dialog
+      class="viewer"
+      @close=${() => (this._viewing = false)}
+      @click=${(event: MouseEvent) => {
+        if (event.target === event.currentTarget) (event.currentTarget as HTMLDialogElement).close();
+      }}
+    >
+      <header>
+        <span class="viewer-title">${this.record.title || fileName(address)}</span>
+        <a
+          class="icon-button"
+          href=${source}
+          target="_blank"
+          rel="noopener noreferrer"
+          title=${localize("open_in_new_tab")}
+          >${icon(mdiOpenInNew, localize("open_in_new_tab"))}</a
+        >
+        <button
+          class="icon-button"
+          title=${localize("close")}
+          @click=${(event: MouseEvent) => ((event.currentTarget as HTMLElement).closest("dialog") as HTMLDialogElement).close()}
+        >
+          ${icon(mdiClose, localize("close"))}
+        </button>
+      </header>
+      <img src=${source} alt=${fileName(address)} />
+    </dialog>`;
   }
 
   private _video(address: string, poster: string | undefined): TemplateResult | typeof nothing {
@@ -411,7 +458,9 @@ export class NotificationJournalRecord extends LitElement {
     if (!this.selectable) return;
     const interactive = event
       .composedPath()
-      .some((target) => target instanceof Element && target.matches("a, button, video, input, select, textarea"));
+      .some(
+        (target) => target instanceof Element && target.matches("a, button, video, input, select, textarea, dialog"),
+      );
     if (interactive) return;
     this.dispatchEvent(
       new CustomEvent("notification-select", { detail: { id: this.record.id }, bubbles: true, composed: true }),
@@ -876,6 +925,53 @@ export class NotificationJournalRecord extends LitElement {
       background: var(--secondary-background-color);
       font: inherit;
       cursor: zoom-in;
+    }
+    .viewer {
+      max-width: min(96vw, 1400px);
+      max-height: 94vh;
+      padding: 0;
+      overflow: hidden;
+      ${surface}
+      color: var(--primary-text-color);
+    }
+    .viewer::backdrop {
+      background: var(--mdc-dialog-scrim-color, rgba(0, 0, 0, 0.32));
+    }
+    .viewer header {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 4px 4px 16px;
+    }
+    .viewer-title {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 500;
+    }
+    .viewer .icon-button {
+      display: grid;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      border: none;
+      border-radius: 50%;
+      background: none;
+      color: var(--secondary-text-color);
+      cursor: pointer;
+    }
+    .viewer .icon-button:hover {
+      background: color-mix(in srgb, currentColor 10%, transparent);
+    }
+    .viewer img {
+      display: block;
+      max-width: min(96vw, 1400px);
+      max-height: calc(94vh - 48px);
+      margin: 0 auto;
+      object-fit: contain;
     }
     .preview img {
       display: block;
