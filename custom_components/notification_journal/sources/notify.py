@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.const import ATTR_ENTITY_ID, EVENT_CALL_SERVICE
-from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import target
 
 from ..models import Answer, Call, NotificationRecord, Recipient
@@ -20,7 +19,7 @@ from ..recipients import (
     legacy_group_members,
 )
 from ..store import NotificationStore
-from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, as_list, new_record
+from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, Listener, as_list, new_record
 
 GROUP_CALL_WINDOW = 5.0
 EVENT_NOTIFICATION_ACTION = "mobile_app_notification_action"
@@ -67,17 +66,9 @@ class NotifySource:
         self._excluded = excluded_channels
         self._resolver = RecipientResolver(hass)
 
-    def async_start(self) -> CALLBACK_TYPE:
-        """Listen to the calls of notify actions and to the answers to their buttons."""
-        remove_calls = self._hass.bus.async_listen(EVENT_CALL_SERVICE, self._handle, event_filter=_is_notify)
-        remove_answers = self._hass.bus.async_listen(EVENT_NOTIFICATION_ACTION, self._handle_answer)
-
-        @callback
-        def _stop() -> None:
-            remove_calls()
-            remove_answers()
-
-        return _stop
+    def listeners(self) -> list[Listener]:
+        """The calls of notify actions and the answers to their buttons."""
+        return [(EVENT_CALL_SERVICE, self._handle, _is_notify), (EVENT_NOTIFICATION_ACTION, self._handle_answer, None)]
 
     async def _handle_answer(self, event: Event) -> None:
         action = event.data.get(ATTR_ACTION)
@@ -125,7 +116,7 @@ class NotifySource:
                     members=frozenset(members),
                     context_id=event.context.id,
                     message=message,
-                    started=time.monotonic(),
+                    started=event.time_fired_timestamp,
                     entity_group=service == SEND_MESSAGE,
                 )
             )
@@ -194,7 +185,7 @@ class NotifySource:
             (event.context.id != parent.context_id or parent.entity_group)
             and parent.members.issuperset(channels)
             and message == parent.message
-            and time.monotonic() - parent.started < GROUP_CALL_WINDOW
+            and event.time_fired_timestamp - parent.started < GROUP_CALL_WINDOW
         )
 
 

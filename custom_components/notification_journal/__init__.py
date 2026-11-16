@@ -12,6 +12,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_EXCLUDED_CHANNELS,
@@ -32,16 +33,20 @@ from .const import (
     SIGNAL_CHANGED,
     Visibility,
 )
+from .importer import async_import
 from .panel import async_register_frontend, async_register_panel, async_remove_panel
 from .recipients import qualify_channel
+from .sources import EventSource
 from .sources.notify import NotifySource
 from .sources.persistent import PersistentNotificationSource
 from .sources.speech import SpeechSource
 from .sources.telegram import TelegramSource
-from .store import NewerSchemaError, NotificationStore
+from .store import NewerSchemaError, NotificationStore, remove_database
 from .websocket_api import async_register
 
 PURGE_INTERVAL = timedelta(days=1)
+IMPORT_BEFORE = "import_before"
+"""Kept in the entry's data from first setup until the import from the recorder is done: up to when it reads."""
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
@@ -51,7 +56,8 @@ class RuntimeData:
 
     store: NotificationStore
     stop: list[CALLBACK_TYPE] = field(default_factory=list)
-    """What feeds the store: the sources, the purge timer and the change forwarding, stopped before it closes."""
+    """What feeds the store: the sources, the import, the purge timer and the change forwarding, stopped before it
+    closes."""
 
 
 type NotificationJournalConfigEntry = ConfigEntry[RuntimeData]
@@ -69,13 +75,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
     options = {**DEFAULT_OPTIONS, **entry.options}
     store = NotificationStore(hass.config.path(DATABASE_FILE))
     try:
-        await store.async_open()
+        created = await store.async_open()
     except NewerSchemaError as err:
         await store.async_close()
         raise ConfigEntryError(str(err)) from err
+    if created:
+        hass.config_entries.async_update_entry(entry, data={**entry.data, IMPORT_BEFORE: dt_util.utcnow().timestamp()})
     runtime = RuntimeData(store=store)
     try:
-        _start(hass, entry, store, runtime.stop, options)
+        sources = _start(hass, entry, store, runtime.stop, options)
         if options[CONF_RECORD_PERSISTENT]:
             runtime.stop.append(await PersistentNotificationSource(hass, store).async_start())
     except Exception:
@@ -83,6 +91,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
         await store.async_close()
         raise
     entry.runtime_data = runtime
+    if (before := entry.data.get(IMPORT_BEFORE)) is not None:
+        importing = entry.async_create_background_task(
+            hass,
+            _import(hass, entry, sources, dt_util.utc_from_timestamp(before), options),
+            "notification_journal import",
+        )
+        runtime.stop.append(importing.cancel)
 
     async_register_panel(
         hass,
@@ -102,23 +117,47 @@ async def async_unload_entry(hass: HomeAssistant, entry: NotificationJournalConf
     return True
 
 
+async def async_remove_entry(hass: HomeAssistant, entry: NotificationJournalConfigEntry) -> None:
+    """Remove the journal with the integration, so a new setup starts empty and imports from the recorder again."""
+    await hass.async_add_executor_job(remove_database, hass.config.path(DATABASE_FILE))
+
+
+async def _import(
+    hass: HomeAssistant,
+    entry: NotificationJournalConfigEntry,
+    sources: list[EventSource],
+    before: datetime,
+    options: dict,
+) -> None:
+    """Import from the recorder once and purge; an import cut short starts over. Open panels reload once at the end."""
+    store = entry.runtime_data.store
+    async with store.async_batch():
+        await store.async_forget_imported()
+        await async_import(hass, sources, before)
+        await store.async_purge(*_purge_limits(options))
+    hass.config_entries.async_update_entry(
+        entry, data={key: value for key, value in entry.data.items() if key != IMPORT_BEFORE}
+    )
+
+
+def _purge_limits(options: dict) -> tuple[int, int, int]:
+    """Return how long and how many notifications are kept, and for how many years the counts."""
+    return int(options[CONF_RETENTION_DAYS]), int(options[CONF_MAX_ENTRIES]), int(options[CONF_STATISTICS_YEARS])
+
+
 def _start(
     hass: HomeAssistant,
     entry: NotificationJournalConfigEntry,
     store: NotificationStore,
     stop: list[CALLBACK_TYPE],
     options: dict,
-) -> None:
-    """Start the purge, the forwarding of changes to subscribers and the event sources."""
-    retention_days = int(options[CONF_RETENTION_DAYS])
-    max_entries = int(options[CONF_MAX_ENTRIES])
-    statistics_years = int(options[CONF_STATISTICS_YEARS])
+) -> list[EventSource]:
+    """Start the purge, the forwarding of changes to subscribers and the event sources; return the sources."""
+    limits = _purge_limits(options)
 
     @callback
     def _purge(_now: datetime | None = None) -> None:
-        entry.async_create_background_task(
-            hass, store.async_purge(retention_days, max_entries, statistics_years), "notification_journal purge"
-        )
+        entry.async_create_background_task(hass, store.async_purge(*limits), "notification_journal purge")
 
     async def _publish(change: str, record_id: str) -> None:
         record = None
@@ -139,13 +178,18 @@ def _start(
     _purge()
     stop.append(async_track_time_interval(hass, _purge, PURGE_INTERVAL))
     excluded = {qualify_channel(channel) for channel in options[CONF_EXCLUDED_CHANNELS]}
+    sources: list[EventSource] = []
     for option, source in (
         (CONF_RECORD_NOTIFY, NotifySource),
         (CONF_RECORD_SPEECH, SpeechSource),
         (CONF_RECORD_TELEGRAM, TelegramSource),
     ):
         if options[option]:
-            stop.append(source(hass, store, excluded_channels=excluded).async_start())
+            sources.append(started := source(hass, store, excluded_channels=excluded))
+            stop.extend(
+                hass.bus.async_listen(kind, handler, event_filter=check) for kind, handler, check in started.listeners()
+            )
+    return sources
 
 
 def _stop(runtime: RuntimeData) -> None:

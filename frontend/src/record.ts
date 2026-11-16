@@ -424,6 +424,7 @@ export class NotificationJournalRecord extends LitElement {
       [localize("group"), record.group],
       [localize("notification_id"), record.source_ref ? html`<code>${record.source_ref}</code>` : null],
       [localize("context"), html`<code>${record.context_id}</code>`],
+      [localize("recorded"), record.origin.imported ? localize("imported") : null],
     ];
     return html`<section class="details">
       <dl>

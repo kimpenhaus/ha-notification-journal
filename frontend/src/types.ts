@@ -18,6 +18,8 @@ export interface Origin {
   run_id: string | null;
   user_id: string | null;
   integration?: string | null;
+  /** Rebuilt from the recorder on first setup. */
+  imported?: boolean;
 }
 
 export interface Answer {
@@ -76,7 +78,7 @@ export interface Facets {
 export type RecordEvent =
   | { change: "added" | "updated"; record: NotificationRecord }
   | { change: "removed"; record_id: string }
-  | { change: "purged"; record_id: string };
+  | { change: "reload"; record_id: string };
 
 export interface Filters {
   text: string;

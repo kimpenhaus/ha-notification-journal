@@ -219,4 +219,4 @@ async def test_purge_tells_listeners(store: NotificationStore) -> None:
     changes.clear()
 
     assert await store.async_purge(30, 1000, 2) == 1
-    assert changes == [("purged", "")]
+    assert changes == [("reload", "")]

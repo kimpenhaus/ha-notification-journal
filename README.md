@@ -21,6 +21,7 @@ Home Assistant forgets a notification the moment it is sent. Notification Journa
 - **Search and filters**: full-text search over title, message, recipients and origin; filters for status, origin and period.
 - **Archive**: select notifications and move them out of your view, as in Home Assistant's own lists; the archive is per person, others keep seeing them.
 - **Private by person**: administrators see everything; everybody else sees the notifications sent to them, the bell and spoken announcements. Telegram chats belong to no Home Assistant user, so only administrators see those.
+- **Starts with the past**: on first setup it imports what Home Assistant's recorder still holds (10 days by default): notify calls, spoken announcements, Telegram messages and the answers to buttons. The automation or script that sent them comes from the recorded context; a notification an integration sent shows as unknown, and the bell's notifications from before are not in the recorder.
 - **Live**: the panel updates while it is open.
 - English and German.
 
@@ -37,7 +38,7 @@ If you closed the setup, start it again under *Settings â†’ Devices & services â
 
 [![Add Notification Journal to your Home Assistant.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=notification_journal)
 
-The panel *Notification Journal* appears in the sidebar. Only notifications sent from now on are recorded.
+The panel *Notification Journal* appears in the sidebar. It starts with what the recorder still holds and records everything sent from now on.
 
 ## Options
 
@@ -75,7 +76,7 @@ Every card shows a status:
 
 Everything stays in your Home Assistant. The journal is an SQLite database, `notification_journal.db`, next to `configuration.yaml`, separate from the recorder. It holds per notification: title, message, the data sent with it (actions, references to images and links, tags), the recipients, the automation, script, user or integration that sent it, the answers to its buttons, and the time. Images and attachments themselves are not copied, only their references. For the statistics it also counts per hour how many notifications each origin sent to whom, without any text.
 
-Old entries are deleted once a day (*Retention*); the hourly counts stay as long as *Keep statistics for* says, also after the notifications are deleted. The database is part of every Home Assistant backup; recording pauses while a backup is taken. Removing the integration keeps the database file; delete it by hand if you want the journal gone.
+Old entries are deleted once a day (*Retention*); the hourly counts stay as long as *Keep statistics for* says, also after the notifications are deleted. The database is part of every Home Assistant backup; recording pauses while a backup is taken. Removing the integration deletes the database with it; setting it up again starts a new journal.
 
 ## What it does not record
 
@@ -83,7 +84,7 @@ Old entries are deleted once a day (*Retention*); the hourly counts stay as long
 - `media_player.play_media` with `announce`, `assist_satellite.start_conversation` and `ask_question`, and the older `tts.*_say` actions.
 - Spoken announcements without text (a sound only).
 - Telegram photos, videos and files without a caption, locations, stickers, media groups, and edits of messages already sent.
-- Anything sent before the integration was set up.
+- Anything sent before the integration was set up, beyond what the recorder still held then; the bell's notifications from before setup.
 
 ## Screenshots
 

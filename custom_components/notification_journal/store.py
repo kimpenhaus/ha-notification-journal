@@ -10,8 +10,9 @@ import sqlite3
 import threading
 import time
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -161,6 +162,39 @@ MIGRATIONS: dict[int, tuple[Migration, ...]] = {
 """The steps from the previous schema version to each version; a new version adds its step here."""
 
 
+COPY_SUFFIX = ".bak-v"
+"""The suffix of a copy made before a migration, followed by the version it was."""
+
+
+def _migration_copy(database: Path) -> re.Pattern[str]:
+    return re.compile(rf"{re.escape(database.name)}{re.escape(COPY_SUFFIX)}(\d+)")
+
+
+def _user_version(connection: sqlite3.Connection) -> int:
+    return connection.execute("PRAGMA user_version").fetchone()[0]
+
+
+def remove_database(path: str) -> None:
+    """Delete a journal: its database, WAL and SHM files and the copies made before migrations.
+
+    A database of a newer version, which setup refused, stays: it belongs to the version that wrote it.
+    """
+    database = Path(path)
+    if database.exists():
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+        try:
+            newer = _user_version(connection) > SCHEMA_VERSION
+        finally:
+            connection.close()
+        if newer:
+            _LOGGER.warning("Kept %s: a newer version of Notification Journal wrote it", database)
+            return
+    copy = _migration_copy(database)
+    for file in database.parent.iterdir():
+        if file.name in (database.name, f"{database.name}-wal", f"{database.name}-shm") or copy.fullmatch(file.name):
+            file.unlink(missing_ok=True)
+
+
 class NewerSchemaError(RuntimeError):
     """The database was written by a newer version of the integration."""
 
@@ -238,11 +272,23 @@ class NotificationStore:
         self._resume = threading.Event()
         self._listeners: list[Callable[[str, str], None]] = []
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._quiet = False
 
-    async def async_open(self) -> None:
-        """Open the database and create the schema."""
+    async def async_open(self) -> bool:
+        """Open the database and create the schema; return whether it was created, as on first setup."""
         self._loop = asyncio.get_running_loop()
-        await self._run(self._open)
+        return await self._run(self._open)
+
+    @asynccontextmanager
+    async def async_batch(self) -> AsyncIterator[None]:
+        """Report no change one by one while inside, and one reload when leaving."""
+        self._quiet = True
+        try:
+            yield
+        finally:
+            await self.async_flush()
+            self._quiet = False
+            self._notify("reload", "")
 
     def async_add_listener(self, listener: Callable[[str, str], None]) -> Callable[[], None]:
         """Call listener(change, record_id) once a record was added, changed or removed; return the remover."""
@@ -287,7 +333,7 @@ class NotificationStore:
         self._submit(self._update_status, record_id, status, time, by, notify=("updated", record_id))
 
     async def async_add_answer(self, source: str, answer: Answer) -> str | None:
-        """Attach an answer to the latest record of a source that offered its button; return that record's id.
+        """Attach an answer to the latest record of a source sent before it that offered its button; return its id.
 
         A record that reached the user who answered comes first; an action ID used by several
         notifications belongs to the most recent one.
@@ -317,6 +363,10 @@ class NotificationStore:
         """
         return await self._run(self._statistics, user_id, current, compared)
 
+    async def async_forget_imported(self) -> None:
+        """Delete what an import from the recorder added, with its counts, so it can run again from the start."""
+        await self._run(self._forget_imported)
+
     async def async_get(self, record_id: str) -> NotificationRecord | None:
         """Return one record."""
         return await self._run(self._get, record_id)
@@ -334,7 +384,7 @@ class NotificationStore:
         counts_cutoff = min(cutoff, year_start(dt_util.now(), statistics_years).timestamp())
         removed = await self._run(self._purge, cutoff, max_entries, counts_cutoff)
         if removed:
-            self._notify("purged", "")
+            self._notify("reload", "")
         return removed
 
     async def async_pause_for_backup(self) -> None:
@@ -362,6 +412,8 @@ class NotificationStore:
             self._loop.call_soon_threadsafe(self._notify, *notify)
 
     def _notify(self, change: str, record_id: str) -> None:
+        if self._quiet:
+            return
         for listener in list(self._listeners):
             listener(change, record_id)
 
@@ -373,22 +425,25 @@ class NotificationStore:
             raise RuntimeError("The Notification Journal database is not open")
         return self._connection
 
-    def _open(self) -> None:
+    def _open(self) -> bool:
         connection = sqlite3.connect(self._path, check_same_thread=False)
         try:
-            self._migrate(connection)
+            created = self._migrate(connection)
             connection.execute("PRAGMA journal_mode = WAL")
+            # Safe with WAL and much faster, as Home Assistant's recorder sets it for SQLite.
+            connection.execute("PRAGMA synchronous = NORMAL")
             connection.execute("PRAGMA foreign_keys = ON")
         except BaseException:
             connection.close()
             raise
         self._connection = connection
         self._remove_migration_copies()
+        return created
 
     def _remove_migration_copies(self) -> None:
         """Remove the copies made before migrations: all but the latest, and that one after MIGRATION_COPY_DAYS."""
         database = Path(self._path)
-        name = re.compile(rf"{re.escape(database.name)}\.bak-v(\d+)")
+        name = _migration_copy(database)
         try:
             copies = sorted(
                 (int(match[1]), path) for path in database.parent.iterdir() if (match := name.fullmatch(path.name))
@@ -407,13 +462,16 @@ class NotificationStore:
                 continue
             _LOGGER.debug("Removed %s, a copy made before a schema migration", copy)
 
-    def _migrate(self, connection: sqlite3.Connection) -> None:
-        """Create a new database, or bring an older one to SCHEMA_VERSION step by step after a backup."""
-        version = connection.execute("PRAGMA user_version").fetchone()[0]
+    def _migrate(self, connection: sqlite3.Connection) -> bool:
+        """Create a new database, or bring an older one to SCHEMA_VERSION step by step after a backup.
+
+        Return whether the database was created.
+        """
+        version = _user_version(connection)
         if connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'notifications'").fetchone() is None:
             connection.executescript(SCHEMA)
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            return
+            return True
         if version > SCHEMA_VERSION:
             raise NewerSchemaError(
                 f"{self._path} has schema version {version}, this version of the integration knows "
@@ -421,8 +479,8 @@ class NotificationStore:
             )
         version = max(version, 1)
         if version == SCHEMA_VERSION:
-            return
-        backup = sqlite3.connect(f"{self._path}.bak-v{version}")
+            return False
+        backup = sqlite3.connect(f"{self._path}{COPY_SUFFIX}{version}")
         with backup:
             connection.backup(backup)
         backup.close()
@@ -517,18 +575,19 @@ class NotificationStore:
     def _add_answer(self, source: str, answer: Answer) -> str | None:
         db = self._db()
         offered = (
-            "SELECT rowid, id FROM notifications WHERE source = ? AND EXISTS "
+            "SELECT rowid, id FROM notifications WHERE source = ? AND time <= ? AND EXISTS "
             "(SELECT 1 FROM json_each(data, '$.data.actions') WHERE json_extract(value, '$.action') = ?)"
         )
+        sent = answer.time.timestamp()
         newest = " ORDER BY time DESC, rowid DESC LIMIT 1"
         row = None
         if answer.user_id is not None:
             row = db.execute(
                 f"{offered} AND rowid IN (SELECT notification FROM notification_users WHERE user_id = ?){newest}",
-                (source, answer.action, answer.user_id),
+                (source, sent, answer.action, answer.user_id),
             ).fetchone()
         if row is None:
-            row = db.execute(offered + newest, (source, answer.action)).fetchone()
+            row = db.execute(offered + newest, (source, sent, answer.action)).fetchone()
         if row is None:
             return None
         with db:
@@ -548,14 +607,17 @@ class NotificationStore:
         )
         return {ref: (record_id, dt_util.utc_from_timestamp(time)) for ref, record_id, time in rows}
 
-    @staticmethod
-    def _recount(db: sqlite3.Connection, before: NotificationRecord | None, after: NotificationRecord) -> None:
+    def _recount(self, db: sqlite3.Connection, before: NotificationRecord | None, after: NotificationRecord) -> None:
         """Move a notification's counts from what it was (None when new) to what it is."""
-        if changes := difference(counts_of(before), counts_of(after)):
+        self._apply(db, after, difference(counts_of(before), counts_of(after)))
+
+    @staticmethod
+    def _apply(db: sqlite3.Connection, record: NotificationRecord, changes: dict[str, tuple[int, int, int]]) -> None:
+        if changes:
             db.executemany(
                 UPSERT_COUNTS,
                 [
-                    (view, slot_of(after.time.timestamp()), origin_key(after.origin), *counts)
+                    (view, slot_of(record.time.timestamp()), origin_key(record.origin), *counts)
                     for view, counts in changes.items()
                 ],
             )
@@ -656,6 +718,14 @@ class NotificationStore:
             [*params, query.limit, query.offset],
         ).fetchall()
         return Page(records=[self._from_row(row) for row in rows], total=total, groups=groups)
+
+    def _forget_imported(self) -> None:
+        db = self._db()
+        with db:
+            for row in db.execute("SELECT * FROM notifications WHERE json_extract(origin, '$.imported')").fetchall():
+                record = self._from_row(row)
+                self._apply(db, record, difference(counts_of(record), {}))
+            db.execute("DELETE FROM notifications WHERE json_extract(origin, '$.imported')")
 
     def _stored_names(self, keys: str, params: list[Any]) -> dict[str, str | None]:
         """Return the name stored with the newest notification of each origin key the query `keys` selects."""

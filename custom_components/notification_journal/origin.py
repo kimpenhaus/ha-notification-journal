@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+from dataclasses import replace
+
 from homeassistant.components.persistent_notification import DOMAIN as PN_DOMAIN
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -17,6 +20,12 @@ KIND_KEYS = frozenset(kind.value for kind in OriginKind)
 NOT_CALLERS = {DOMAIN, PN_DOMAIN}
 """Integrations on the stack that only pass a notification on: this one, and the bell reporting a change."""
 
+replayed_origins: ContextVar[dict[str, Origin] | None] = ContextVar(
+    "notification_journal_replayed_origins", default=None
+)
+"""Set while events from the recorder are replayed: the automations and scripts that ran, by context; the origin of
+a replayed call comes from its recorded context instead of the trace and the call stack of the time."""
+
 
 def resolve_origin(hass: HomeAssistant, context: Context) -> Origin:
     """Return the origin of a service call that is running right now.
@@ -26,6 +35,8 @@ def resolve_origin(hass: HomeAssistant, context: Context) -> Origin:
     group makes for its members. Those listeners run inside the call, so without an automation,
     script or user the call stack still holds the integration that made it.
     """
+    if (replayed := replayed_origins.get()) is not None:
+        return _replayed_origin(replayed, context)
     if (trace_id := trace_id_get()) is not None:
         key, run_id = trace_id
         domain, _, item_id = key.partition(".")
@@ -43,6 +54,16 @@ def resolve_origin(hass: HomeAssistant, context: Context) -> Origin:
     if context.user_id:
         return Origin(kind=OriginKind.USER, user_id=context.user_id)
     return _calling_integration(hass)
+
+
+def _replayed_origin(origins: dict[str, Origin], context: Context) -> Origin:
+    """Return the automation or script that ran in a recorded context with who started it, else the user, else
+    an unknown origin; all marked as imported."""
+    if (origin := origins.get(context.id)) is not None:
+        return replace(origin, user_id=context.user_id)
+    if context.user_id:
+        return Origin(kind=OriginKind.USER, user_id=context.user_id, imported=True)
+    return Origin(kind=OriginKind.UNKNOWN, imported=True)
 
 
 def _calling_integration(hass: HomeAssistant) -> Origin:

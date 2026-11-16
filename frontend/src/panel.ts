@@ -300,20 +300,20 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private _received(event: RecordEvent): void {
-    if (event.change === "removed" || event.change === "purged") {
-      if (event.change === "removed") {
-        this._removed(event.record_id);
-      } else {
-        void this._load();
-        void this._loadFacets();
-      }
-      return;
-    }
-    const { change, record } = event;
-    if (this._screen === "statistics") {
+    if (event.change !== "removed" && this._screen === "statistics") {
       window.clearTimeout(this._statisticsTimer);
       this._statisticsTimer = window.setTimeout(() => void this._statistics?.refresh(), 2000);
     }
+    if (event.change === "removed") {
+      this._removed(event.record_id);
+      return;
+    }
+    if (event.change === "reload") {
+      void this._load();
+      void this._loadFacets();
+      return;
+    }
+    const { change, record } = event;
     const index = this._records.findIndex((known) => known.id === record.id);
     if (index >= 0) {
       this._records = this._records.map((known, position) => (position === index ? record : known));

@@ -5,13 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.const import ATTR_ENTITY_ID, EVENT_CALL_SERVICE
-from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import target
 
 from ..models import RecipientKind
 from ..recipients import entity_group_members, entity_recipient
 from ..store import NotificationStore
-from . import ATTR_MESSAGE, TARGET_KEYS, as_list, new_record
+from . import ATTR_MESSAGE, TARGET_KEYS, Listener, as_list, new_record
 
 TTS_DOMAIN = "tts"
 SATELLITE_DOMAIN = "assist_satellite"
@@ -31,9 +31,9 @@ class SpeechSource:
         self._store = store
         self._excluded = excluded_channels
 
-    def async_start(self) -> CALLBACK_TYPE:
-        """Listen to the calls of tts.speak and assist_satellite.announce."""
-        return self._hass.bus.async_listen(EVENT_CALL_SERVICE, self._handle, event_filter=_is_speech)
+    def listeners(self) -> list[Listener]:
+        """The calls of tts.speak and assist_satellite.announce."""
+        return [(EVENT_CALL_SERVICE, self._handle, _is_speech)]
 
     @callback
     def _handle(self, event: Event) -> None:
