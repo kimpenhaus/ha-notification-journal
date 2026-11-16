@@ -1,6 +1,8 @@
 """Tests of the WebSocket commands and who sees what."""
 
-from datetime import timedelta
+from dataclasses import replace
+from datetime import UTC, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 from unittest.mock import patch
 
 from homeassistant.auth.models import User
@@ -118,6 +120,49 @@ async def test_list_by_tag(hass: HomeAssistant, hass_ws_client: WebSocketGenerat
     result = (await _call(await hass_ws_client(hass), type=f"{DOMAIN}/list", tag="doorbell_ring"))["result"]
 
     assert [r["id"] for r in result["records"]] == ["ring"]
+
+
+async def test_list_counts_days_in_the_callers_time_zone(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator, hass_admin_user: User
+) -> None:
+    runtime = await _setup(hass)
+    anna = [_person(hass_admin_user, "Anna")]
+    day = (dt_util.utcnow() - timedelta(days=3)).date()
+    times = {
+        "a": datetime.combine(day, time(23, 30), UTC),
+        "b": datetime.combine(day + timedelta(days=1), time(10), UTC),
+        "c": datetime.combine(day + timedelta(days=1), time(12), UTC),
+    }
+    for record_id, moment in times.items():
+        runtime.store.add(replace(_record(record_id, record_id, anna), time=moment))
+    await runtime.store.async_flush()
+    client = await hass_ws_client(hass)
+
+    auckland = (await _call(client, type=f"{DOMAIN}/list", days=True, time_zone="Pacific/Auckland"))["result"]
+    utc = (await _call(client, type=f"{DOMAIN}/list", days=True, time_zone="UTC", newest_first=False))["result"]
+    plain = (await _call(client, type=f"{DOMAIN}/list"))["result"]
+
+    zone = ZoneInfo("Pacific/Auckland")
+    newest = day + timedelta(days=2)
+    assert auckland["days"] == [
+        {
+            "day": newest.isoformat(),
+            "since": datetime.combine(newest, time.min, zone).isoformat(),
+            "until": datetime.combine(newest + timedelta(days=1), time.min, zone).isoformat(),
+            "count": 1,
+        },
+        {
+            "day": (day + timedelta(days=1)).isoformat(),
+            "since": datetime.combine(day + timedelta(days=1), time.min, zone).isoformat(),
+            "until": datetime.combine(newest, time.min, zone).isoformat(),
+            "count": 2,
+        },
+    ]
+    assert [(entry["day"], entry["count"]) for entry in utc["days"]] == [
+        (day.isoformat(), 1),
+        ((day + timedelta(days=1)).isoformat(), 2),
+    ]
+    assert "days" not in plain
 
 
 async def test_record_carries_exact_trace_path(

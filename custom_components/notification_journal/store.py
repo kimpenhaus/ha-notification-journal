@@ -9,12 +9,12 @@ import re
 import sqlite3
 import threading
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -221,6 +221,8 @@ class Query:
     offset: int = 0
     with_counts: bool = True
     """Count the matches (and per origin); a further page of the same list needs no counts."""
+    days_in: tzinfo | None = None
+    """With the counts, also count the matches per day in this time zone."""
 
 
 @dataclass(slots=True)
@@ -247,6 +249,8 @@ class Page:
     records: list[NotificationRecord]
     total: int | None
     groups: dict[str, int] | None = None
+    days: list[tuple[date, int]] | None = None
+    """The days that hold matches and how many each, in the order of the list."""
 
 
 def _fts_query(text: str) -> str | None:
@@ -708,7 +712,14 @@ class NotificationStore:
         total = None
         if query.with_counts:
             total = db.execute(f"SELECT count(*) FROM notifications {clause}", params).fetchone()[0]
-        groups = None
+        groups = days = None
+        if query.with_counts and query.days_in is not None:
+            zone = query.days_in
+            counted = Counter(
+                datetime.fromtimestamp(stamp, zone).date()
+                for (stamp,) in db.execute(f"SELECT time FROM notifications {clause}", params)
+            )
+            days = sorted(counted.items(), reverse=query.newest_first)
         sort = f"time {order}, rowid {order}"
         if query.group_by_origin:
             if query.with_counts:
@@ -722,7 +733,7 @@ class NotificationStore:
             f"SELECT * FROM notifications {clause} ORDER BY {sort} LIMIT ? OFFSET ?",
             [*params, query.limit, query.offset],
         ).fetchall()
-        return Page(records=[self._from_row(row) for row in rows], total=total, groups=groups)
+        return Page(records=[self._from_row(row) for row in rows], total=total, groups=groups, days=days)
 
     def _forget_imported(self) -> None:
         db = self._db()
