@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
+import sqlite3
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -43,10 +47,14 @@ from .sources.notify import NotifySource
 from .sources.persistent import PersistentNotificationSource
 from .sources.speech import SpeechSource
 from .sources.telegram import TelegramSource
-from .store import NewerSchemaError, NotificationStore
+from .store import SCHEMA_VERSION, NewerSchemaError, NotificationStore
 from .websocket_api import async_register
 
+_LOGGER = logging.getLogger(__name__)
+
 PURGE_INTERVAL = timedelta(days=1)
+IMPORT_BEFORE = "import_before"
+"""Kept in the entry's data from first setup until the import from the recorder is done: up to when it reads."""
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
@@ -57,6 +65,8 @@ class RuntimeData:
     store: NotificationStore
     stop: list[CALLBACK_TYPE] = field(default_factory=list)
     """What feeds the store: the sources, the purge timer and the change forwarding, stopped before it closes."""
+    importing: asyncio.Task[None] | None = None
+    """The import from the recorder, cancelled before the store closes."""
 
 
 type NotificationJournalConfigEntry = ConfigEntry[RuntimeData]
@@ -78,6 +88,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
     except NewerSchemaError as err:
         await store.async_close()
         raise ConfigEntryError(str(err)) from err
+    if store.created:
+        hass.config_entries.async_update_entry(entry, data={**entry.data, IMPORT_BEFORE: dt_util.utcnow().timestamp()})
     runtime = RuntimeData(store=store)
     try:
         sources = _start(hass, entry, store, runtime.stop, options)
@@ -88,9 +100,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
         await store.async_close()
         raise
     entry.runtime_data = runtime
-    if store.created:
-        entry.async_create_background_task(
-            hass, async_import(hass, sources, dt_util.utcnow()), "notification_journal recorder import"
+    if (before := entry.data.get(IMPORT_BEFORE)) is not None:
+        runtime.importing = entry.async_create_background_task(
+            hass,
+            _import(hass, entry, sources, dt_util.utc_from_timestamp(before), options),
+            "notification_journal import",
         )
 
     async_register_panel(
@@ -107,6 +121,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
 async def async_unload_entry(hass: HomeAssistant, entry: NotificationJournalConfigEntry) -> bool:
     """Unload the config entry: stop everything that writes to the store, then close it."""
     _stop(entry.runtime_data)
+    if (importing := entry.runtime_data.importing) is not None:
+        importing.cancel()
+        with suppress(asyncio.CancelledError):
+            await importing
     await entry.runtime_data.store.async_close()
     return True
 
@@ -117,11 +135,52 @@ async def async_remove_entry(hass: HomeAssistant, entry: NotificationJournalConf
 
 
 def _remove_database(database: Path) -> None:
-    """Delete the database, its WAL and SHM files and the copies made before migrations."""
+    """Delete the database, its WAL and SHM files and the copies made before migrations.
+
+    A database of a newer version, which setup refused, stays: it belongs to the version that wrote it.
+    """
+    if database.exists() and _schema_version(database) > SCHEMA_VERSION:
+        _LOGGER.warning("Kept %s: a newer version of Notification Journal wrote it", database)
+        return
     own = re.compile(rf"{re.escape(database.name)}(-wal|-shm|\.bak-v\d+)?")
     for path in database.parent.iterdir():
         if own.fullmatch(path.name):
             path.unlink(missing_ok=True)
+
+
+def _schema_version(database: Path) -> int:
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    try:
+        return connection.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        connection.close()
+
+
+async def _import(
+    hass: HomeAssistant,
+    entry: NotificationJournalConfigEntry,
+    sources: list[EventSource],
+    before: datetime,
+    options: dict,
+) -> None:
+    """Import from the recorder once, after what an interrupted import got to, then purge and reload the panels.
+
+    The records are reported to the panels once at the end instead of one by one.
+    """
+    store = entry.runtime_data.store
+    store.quiet = True
+    try:
+        await async_import(hass, sources, await store.async_newest_imported(), before)
+        await store.async_flush()
+    finally:
+        store.quiet = False
+    hass.config_entries.async_update_entry(
+        entry, data={key: value for key, value in entry.data.items() if key != IMPORT_BEFORE}
+    )
+    await store.async_purge(
+        int(options[CONF_RETENTION_DAYS]), int(options[CONF_MAX_ENTRIES]), int(options[CONF_STATISTICS_YEARS])
+    )
+    store.reload()
 
 
 def _start(

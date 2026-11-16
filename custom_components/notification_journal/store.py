@@ -240,6 +240,8 @@ class NotificationStore:
         self._loop: asyncio.AbstractEventLoop | None = None
         self.created = False
         """Whether opening the store created the database, as on first setup."""
+        self.quiet = False
+        """While set, added and changed records are not reported one by one; `reload` reports them all at once."""
 
     async def async_open(self) -> None:
         """Open the database and create the schema."""
@@ -319,6 +321,10 @@ class NotificationStore:
         """
         return await self._run(self._statistics, user_id, current, compared)
 
+    async def async_newest_imported(self) -> datetime | None:
+        """Return when the newest notification imported from the recorder was sent, if any was."""
+        return await self._run(self._newest_imported)
+
     async def async_get(self, record_id: str) -> NotificationRecord | None:
         """Return one record."""
         return await self._run(self._get, record_id)
@@ -336,7 +342,7 @@ class NotificationStore:
         counts_cutoff = min(cutoff, year_start(dt_util.now(), statistics_years).timestamp())
         removed = await self._run(self._purge, cutoff, max_entries, counts_cutoff)
         if removed:
-            self._notify("purged", "")
+            self.reload()
         return removed
 
     async def async_pause_for_backup(self) -> None:
@@ -360,8 +366,12 @@ class NotificationStore:
         if (error := future.exception()) is not None:
             _LOGGER.warning("Could not store a notification: %s", error)
             return
-        if self._loop is not None and self._listeners:
+        if self._loop is not None and self._listeners and not self.quiet:
             self._loop.call_soon_threadsafe(self._notify, *notify)
+
+    def reload(self) -> None:
+        """Tell the listeners that records changed at large, so whoever shows them loads them again."""
+        self._notify("reload", "")
 
     def _notify(self, change: str, record_id: str) -> None:
         for listener in list(self._listeners):
@@ -660,6 +670,14 @@ class NotificationStore:
             [*params, query.limit, query.offset],
         ).fetchall()
         return Page(records=[self._from_row(row) for row in rows], total=total, groups=groups)
+
+    def _newest_imported(self) -> datetime | None:
+        row = (
+            self._db()
+            .execute("SELECT max(time) FROM notifications WHERE json_extract(origin, '$.imported')")
+            .fetchone()
+        )
+        return None if row[0] is None else dt_util.utc_from_timestamp(row[0])
 
     def _stored_names(self, keys: str, params: list[Any]) -> dict[str, str | None]:
         """Return the name stored with the newest notification of each origin key the query `keys` selects."""

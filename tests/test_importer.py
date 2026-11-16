@@ -1,5 +1,6 @@
 """Tests of the import from the recorder on first setup, and of removing the journal with the integration."""
 
+import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
@@ -7,12 +8,13 @@ import pytest
 from homeassistant.const import EVENT_CALL_SERVICE
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.components.recorder.common import async_wait_recording_done
 
 from custom_components.notification_journal.const import DATABASE_FILE, DEFAULT_OPTIONS, DOMAIN
 from custom_components.notification_journal.models import OriginKind
-from custom_components.notification_journal.store import Query
+from custom_components.notification_journal.store import SCHEMA_VERSION, Query
 
 USER = uuid4().hex
 BUTTONS = {"actions": [{"action": "CLOSE_GARAGE", "title": "Close"}]}
@@ -120,6 +122,52 @@ async def test_an_existing_journal_imports_nothing(recorder_mock, hass: HomeAssi
     await hass.async_block_till_done(wait_background_tasks=True)
 
     assert await _records(entry) == []
+
+
+async def test_an_interrupted_import_goes_on_after_what_it_got_to(recorder_mock, hass: HomeAssistant) -> None:
+    _notify(hass, "mobile_app_phone", "First", Context())
+    await async_wait_recording_done(hass)
+    entry = await _setup(hass)
+    assert [r.message for r in await _records(entry)] == ["First"]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    _notify(hass, "mobile_app_phone", "Second", Context())
+    await async_wait_recording_done(hass)
+    hass.config_entries.async_update_entry(entry, data={"import_before": dt_util.utcnow().timestamp()})
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert [r.message for r in await _records(entry)] == ["First", "Second"]
+    assert "import_before" not in entry.data
+
+
+async def test_a_failing_event_is_skipped(recorder_mock, hass: HomeAssistant) -> None:
+    hass.bus.async_fire(
+        EVENT_CALL_SERVICE,
+        {"domain": "telegram_bot", "service": "send_message", "service_data": {"message": "x", "chat_id": "@channel"}},
+        context=Context(),
+    )
+    _notify(hass, "mobile_app_phone", "After it", Context())
+    await async_wait_recording_done(hass)
+
+    entry = await _setup(hass)
+
+    assert [r.message for r in await _records(entry)] == ["After it"]
+
+
+async def test_a_newer_journal_stays_when_the_integration_is_removed(
+    recorder_mock, hass: HomeAssistant, config_dir: Path
+) -> None:
+    entry = await _setup(hass)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    database = config_dir / DATABASE_FILE
+    connection = sqlite3.connect(database)
+    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+    connection.close()
+
+    await hass.config_entries.async_remove(entry.entry_id)
+
+    assert database.exists()
 
 
 async def test_removing_the_integration_removes_its_journal(

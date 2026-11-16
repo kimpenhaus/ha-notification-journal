@@ -78,7 +78,7 @@ export interface Facets {
 export type RecordEvent =
   | { change: "added" | "updated"; record: NotificationRecord }
   | { change: "removed"; record_id: string }
-  | { change: "purged"; record_id: string };
+  | { change: "reload"; record_id: string };
 
 export interface Filters {
   text: string;
