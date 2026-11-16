@@ -44,6 +44,11 @@ function parts(clock: Clock, date: Date): string {
 
 const dayKeys = new Map<string, string>();
 
+/** The name of the time zone a clock shows; the browser's own when it follows the device. */
+export function zoneName(clock: Clock): string {
+  return clock.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
 export function dayKey(clock: Clock, iso: string): string {
   const key = `${clock.timeZone ?? ""}|${iso}`;
   let day = dayKeys.get(key);

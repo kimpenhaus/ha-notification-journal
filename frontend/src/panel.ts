@@ -1,7 +1,7 @@
 import { css, html, LitElement, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 
-import { type Clock, dayKey, dayLabel, formatter } from "./format";
+import { type Clock, dayKey, dayLabel, formatter, zoneName } from "./format";
 import {
   icon,
   mdiArchiveArrowDownOutline,
@@ -113,6 +113,7 @@ export class NotificationJournalPanel extends LitElement {
     _groups: { state: true },
     _folded: { state: true },
     _days: { state: true },
+    _dayLoads: { state: true },
     _notice: { state: true },
     _archived: { state: true },
     _selecting: { state: true },
@@ -135,9 +136,9 @@ export class NotificationJournalPanel extends LitElement {
   declare _folded: Map<string, boolean>;
   /** Every day of the plain timeline; its notifications load when a day opens. Unset while the list pages. */
   declare _days: Day[] | undefined;
-  private _loadedDays = new Set<string>();
-  private _loadingDays = new Set<string>();
-  private _failedDays = new Map<string, string>();
+  /** Days whose notifications are loading or failed to load, with the text shown in their place. */
+  declare _dayLoads: Map<string, string>;
+  private _grouped?: { records: NotificationRecord[]; days: Map<string, NotificationRecord[]> };
   private _open: "all" | "none" | "later" | `day-${string}` = "later";
   private _foldedFor = "";
   declare _notice: string | undefined;
@@ -173,6 +174,7 @@ export class NotificationJournalPanel extends LitElement {
     this._view = stored(VIEW_KEY) === "origin" ? "origin" : "time";
     this._groups = {};
     this._folded = new Map();
+    this._dayLoads = new Map();
     this._archived = false;
     this._selecting = false;
     this._selected = new Set();
@@ -278,20 +280,15 @@ export class NotificationJournalPanel extends LitElement {
     const request = ++this._request;
     this._loading = true;
     try {
-      const byDay = this._byDay && !more;
-      const page = await this._hass.connection.sendMessagePromise<Page>({
-        type: "notification_journal/list",
-        ...this._query(),
+      const withDays = this._byDay && !more;
+      const page = await this._list({
         limit: PAGE_SIZE,
         offset: more ? this._records.length : 0,
-        ...(byDay ? this._dayQuery : {}),
+        ...(withDays ? this._dayQuery : {}),
       });
       if (request !== this._request) return;
       if (more) {
-        const known = new Set(this._records.map((record) => record.id));
-        const fresh = page.records.filter((record) => !known.has(record.id));
-        this._records = [...this._records, ...fresh];
-        if (!fresh.length) {
+        if (!this._append(page.records)) {
           // A record that arrived meanwhile shifted the offsets; what the server counts is already loaded.
           this._total = this._records.length;
           return;
@@ -299,10 +296,8 @@ export class NotificationJournalPanel extends LitElement {
       } else {
         this._records = page.records;
         this._pending = 0;
-        this._days = byDay ? (page.days ?? []) : undefined;
-        this._loadedDays = this._wholeDays(page.records);
-        this._loadingDays = new Set();
-        this._failedDays = new Map();
+        this._days = withDays ? (page.days ?? []) : undefined;
+        this._dayLoads = new Map();
       }
       if (page.total !== undefined) this._total = page.total;
       if (page.groups !== undefined || !more) this._groups = page.groups ?? {};
@@ -348,7 +343,8 @@ export class NotificationJournalPanel extends LitElement {
       this._records = this._records.map((known, position) => (position === index ? record : known));
     } else if (change === "added" && !this._archived) {
       if (this._days) {
-        this._count(record, 1);
+        this._count([record], 1);
+        this._append([record]);
       } else if (this._unfiltered && this._complete) {
         const first = this._records[0];
         this._records = [record, ...this._records];
@@ -396,7 +392,7 @@ export class NotificationJournalPanel extends LitElement {
       return;
     }
     this._records = this._records.filter((known) => !ids.has(known.id));
-    if (this._days) for (const record of gone) this._count(record, -1);
+    if (this._days) this._count(gone, -1);
     else this._total = Math.max(0, this._total - gone.length);
     const groups = { ...this._groups };
     for (const record of gone) if (groups[groupKey(record)]) groups[groupKey(record)] -= 1;
@@ -436,11 +432,11 @@ export class NotificationJournalPanel extends LitElement {
 
   /** The records on screen: by day, only those of open days loaded whole. */
   private _shown(): NotificationRecord[] {
-    if (!this._dayList) return this._records;
-    return this._records.filter((record) => {
-      const day = dayKey(this._clock, record.time);
-      return this._loadedDays.has(day) && !this._isCollapsed(`day-${day}`);
-    });
+    if (!this._days) return this._records;
+    const byDay = this._recordsByDay();
+    return this._days
+      .filter((day) => !this._isCollapsed(`day-${day.day}`) && this._loaded(day))
+      .flatMap((day) => byDay.get(day.day) ?? []);
   }
 
   private _endSelection(): void {
@@ -457,7 +453,8 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private _toggle(section: string): void {
-    this._failedDays.delete(section.slice("day-".length));
+    const day = section.slice("day-".length);
+    if (section.startsWith("day-") && this._dayLoads.has(day)) this._setDayLoads([day], undefined);
     this._folded = new Map(this._folded).set(section, !this._isCollapsed(section));
   }
 
@@ -477,10 +474,7 @@ export class NotificationJournalPanel extends LitElement {
     this._settle();
   }
 
-  /**
-   * Opens from the newest day once it is known: oldest first, only with the last page. Days newer than the open one
-   * are open anyway, and the open day only moves back when its notifications are gone.
-   */
+  /** Opens from the newest day listed; the open day only moves back when its notifications are gone. */
   private _settle(): void {
     const open = this._open;
     const days = this._days;
@@ -500,7 +494,7 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private _sections(): string[] {
-    if (this._dayList) return this._dayList.map((day) => `day-${day.day}`);
+    if (this._days) return this._days.map((day) => `day-${day.day}`);
     return [...new Set(this._records.map((record) => this._sectionKey(record)))];
   }
 
@@ -508,13 +502,42 @@ export class NotificationJournalPanel extends LitElement {
     return this._view === "time" && this._unfiltered;
   }
 
-  /** The days to show; none while the list switches to paging and its stale days still wait for the answer. */
-  private get _dayList(): Day[] | undefined {
-    return this._byDay ? this._days : undefined;
+  private _list(extra: Record<string, unknown>): Promise<Page> {
+    return this._hass!.connection.sendMessagePromise<Page>({
+      type: "notification_journal/list",
+      ...this._query(),
+      ...extra,
+    });
   }
 
-  private get _dayQuery(): Record<string, unknown> {
-    return { days: true, time_zone: this._clock.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone };
+  /** Adds the records not loaded yet, sorted in; returns how many were new. */
+  private _append(records: NotificationRecord[]): number {
+    const known = new Set(this._records.map((record) => record.id));
+    const fresh = records.filter((record) => !known.has(record.id) && known.add(record.id));
+    if (fresh.length) {
+      this._records = [...this._records, ...fresh];
+      this._arrange();
+    }
+    return fresh.length;
+  }
+
+  /** The loaded records of each day, built once per list of records. */
+  private _recordsByDay(): Map<string, NotificationRecord[]> {
+    if (this._grouped?.records !== this._records) {
+      const days = new Map<string, NotificationRecord[]>();
+      for (const record of this._records) {
+        const day = dayKey(this._clock, record.time);
+        const list = days.get(day);
+        if (list) list.push(record);
+        else days.set(day, [record]);
+      }
+      this._grouped = { records: this._records, days };
+    }
+    return this._grouped.days;
+  }
+
+  private _loaded(day: Day): boolean {
+    return this._recordsByDay().get(day.day)?.length === day.count;
   }
 
   /** Loads the days and their counts anew, keeping the notifications loaded; for a day new or gone unseen. */
@@ -527,97 +550,71 @@ export class NotificationJournalPanel extends LitElement {
     if (!this._days || !this._hass) return;
     const request = this._request;
     try {
-      const page = await this._hass.connection.sendMessagePromise<Page>({
-        type: "notification_journal/list",
-        ...this._query(),
-        ...this._dayQuery,
-        limit: 1,
-      });
+      const page = await this._list({ ...this._dayQuery, limit: 1 });
       if (request !== this._request || !this._days) return;
       this._days = page.days ?? [];
       if (page.total !== undefined) this._total = page.total;
-      const present = new Set(this._days.map((day) => day.day));
-      this._loadedDays = new Set([...this._loadedDays].filter((day) => present.has(day)));
       this._settle();
     } catch {
       // The next load reports it.
     }
   }
 
-  /** The days of which every notification is among the records. */
-  private _wholeDays(records: NotificationRecord[]): Set<string> {
-    const counts = new Map<string, number>();
-    for (const record of records) {
-      const day = dayKey(this._clock, record.time);
-      counts.set(day, (counts.get(day) ?? 0) + 1);
-    }
-    return new Set((this._days ?? []).filter((day) => counts.get(day.day) === day.count).map((day) => day.day));
+  private get _dayQuery(): Record<string, unknown> {
+    return { days: true, time_zone: zoneName(this._clock) };
   }
 
-  /** Counts a notification that arrived or went into its day; a day not listed yet loads the days anew. */
-  private _count(record: NotificationRecord, change: 1 | -1): void {
-    const key = dayKey(this._clock, record.time);
-    const day = this._days?.find((known) => known.day === key);
-    if (!day) {
-      this._refreshDays();
-      return;
+  /** Counts notifications that arrived or went into their days; a day not listed yet loads the days anew. */
+  private _count(records: NotificationRecord[], change: 1 | -1): void {
+    const tally = new Map<string, number>();
+    for (const record of records) {
+      const day = dayKey(this._clock, record.time);
+      tally.set(day, (tally.get(day) ?? 0) + change);
     }
-    const count = day.count + change;
-    this._days = count
-      ? this._days!.map((known) => (known === day ? { ...known, count } : known))
-      : this._days!.filter((known) => known !== day);
-    this._total = Math.max(0, this._total + change);
-    if (change > 0 && (this._loadedDays.has(key) || this._loadingDays.has(key))) {
-      this._records = [...this._records, record];
-      this._arrange();
-    }
+    const days = this._days ?? [];
+    if ([...tally.keys()].some((day) => !days.some((known) => known.day === day))) this._refreshDays();
+    this._days = days
+      .map((day) => (tally.has(day.day) ? { ...day, count: day.count + tally.get(day.day)! } : day))
+      .filter((day) => day.count > 0);
+    this._total = Math.max(0, this._total + change * records.length);
   }
 
   /** Loads the notifications of the open days not loaded yet, in one span from the oldest to the newest of them. */
   private async _loadOpenDays(): Promise<void> {
-    const wanted = (this._days ?? []).filter(
-      (day) =>
-        !this._loadedDays.has(day.day) &&
-        !this._loadingDays.has(day.day) &&
-        !this._failedDays.has(day.day) &&
-        !this._isCollapsed(`day-${day.day}`),
+    const days = this._days ?? [];
+    const wanted = days.filter(
+      (day) => !this._dayLoads.has(day.day) && !this._isCollapsed(`day-${day.day}`) && !this._loaded(day),
     );
     if (!wanted.length || !this._hass) return;
-    const since = wanted.reduce((first, day) => (day.since < first ? day.since : first), wanted[0]!.since);
-    const until = wanted.reduce((last, day) => (day.until > last ? day.until : last), wanted[0]!.until);
-    const inSpan = (this._days ?? []).filter((day) => day.since >= since && day.until <= until).map((day) => day.day);
-    for (const day of inSpan) this._loadingDays.add(day);
+    const ends = [wanted[0]!, wanted.at(-1)!].sort((left, right) => compare(left.day, right.day));
+    const [first, last] = [ends[0]!, ends[1]!];
+    const span = days.filter((day) => day.day >= first.day && day.day <= last.day).map((day) => day.day);
+    this._setDayLoads(span, this._localize("loading"));
     const request = this._request;
     const fresh: NotificationRecord[] = [];
     try {
       for (let offset = 0; ; offset += DAY_PAGE_SIZE) {
-        const page = await this._hass.connection.sendMessagePromise<Page>({
-          type: "notification_journal/list",
-          ...this._query(),
-          since,
-          until,
-          limit: DAY_PAGE_SIZE,
-          offset,
-        });
+        const page = await this._list({ since: first.since, until: last.until, limit: DAY_PAGE_SIZE, offset });
         if (request !== this._request) return;
         fresh.push(...page.records);
         if (page.records.length < DAY_PAGE_SIZE) break;
       }
-      const merged = new Map(this._records.map((record) => [record.id, record]));
-      for (const record of fresh) if (!merged.has(record.id)) merged.set(record.id, record);
-      this._records = [...merged.values()];
-      this._arrange();
-      this._loadedDays = new Set([...this._loadedDays, ...inSpan]);
+      this._append(fresh);
+      this._setDayLoads(span, undefined);
     } catch (error) {
       if (request !== this._request) return;
-      const message = this._localize("load_failed", { message: errorMessage(error) });
-      for (const day of inSpan) this._failedDays.set(day, message);
-    } finally {
-      if (request === this._request) {
-        for (const day of inSpan) this._loadingDays.delete(day);
-        this.requestUpdate();
-      }
+      this._setDayLoads(span, this._localize("load_failed", { message: errorMessage(error) }));
     }
+  }
+
+  /** Marks days as loading, failed with a message, or neither. */
+  private _setDayLoads(days: string[], state: string | undefined): void {
+    const loads = new Map(this._dayLoads);
+    for (const day of days) {
+      if (state === undefined) loads.delete(day);
+      else loads.set(day, state);
+    }
+    this._dayLoads = loads;
   }
 
   private get _unfiltered(): boolean {
@@ -635,11 +632,14 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private _rearrange(local: boolean): void {
-    const whole = this._days ? this._byDay : this._complete && !this._byDay;
+    const whole = this._byDay ? !!this._days : !this._days && this._complete;
     if (local && whole && !this._loading) {
       this._arrange();
+      const days = this._days;
+      if (days && days[0]!.day < days.at(-1)!.day === this._filters.newestFirst) this._days = [...days].reverse();
       this._refold();
     } else {
+      if (!this._byDay) this._days = undefined;
       void this._load();
     }
   }
@@ -699,8 +699,9 @@ export class NotificationJournalPanel extends LitElement {
 
   private _arrange(): void {
     const sign = this._filters.newestFirst ? -1 : 1;
+    const times = new Map(this._records.map((record) => [record.id, Date.parse(record.time)]));
     const byTime = (left: NotificationRecord, right: NotificationRecord) =>
-      sign * (Date.parse(left.time) - Date.parse(right.time) || compare(left.id, right.id));
+      sign * (times.get(left.id)! - times.get(right.id)! || compare(left.id, right.id));
     const records = [...this._records];
     if (this._view === "origin") {
       records.sort((left, right) => compare(originRank(left), originRank(right)) || byTime(left, right));
@@ -711,10 +712,6 @@ export class NotificationJournalPanel extends LitElement {
       records.sort(byTime);
     }
     this._records = records;
-    if (this._days) {
-      const order = this._filters.newestFirst ? -1 : 1;
-      this._days = [...this._days].sort((left, right) => order * compare(left.day, right.day));
-    }
   }
 
   protected override updated(changed: PropertyValues): void {
@@ -1011,7 +1008,7 @@ export class NotificationJournalPanel extends LitElement {
         <p>${this._error}</p>
       </div>`;
     }
-    const days = this._dayList;
+    const days = this._days;
     if (days ? !days.length : !this._records.length) {
       if (this._loading) return html`<div class="empty"><p>${localize("loading")}</p></div>`;
       return this._unfiltered
@@ -1033,19 +1030,13 @@ export class NotificationJournalPanel extends LitElement {
     const items: Item[] = [];
     let collapsed = false;
     if (days) {
-      const byDay = new Map<string, NotificationRecord[]>();
-      for (const record of this._records) {
-        const key = dayKey(clock, record.time);
-        const list = byDay.get(key);
-        if (list) list.push(record);
-        else byDay.set(key, [record]);
-      }
-      for (const { day, count } of days) {
-        collapsed = this._isCollapsed(`day-${day}`);
-        items.push({ day, collapsed, count });
+      const recordsByDay = this._recordsByDay();
+      for (const day of days) {
+        collapsed = this._isCollapsed(`day-${day.day}`);
+        items.push({ day: day.day, collapsed, count: day.count });
         if (collapsed) continue;
-        if (this._loadedDays.has(day)) for (const record of byDay.get(day) ?? []) items.push({ record });
-        else items.push({ waiting: day });
+        if (this._loaded(day)) for (const record of recordsByDay.get(day.day) ?? []) items.push({ record });
+        else items.push({ waiting: day.day });
       }
     } else {
       let section = "";
@@ -1093,7 +1084,7 @@ export class NotificationJournalPanel extends LitElement {
                   ${item.count === undefined ? nothing : html`<span class="group-count">${item.count}</span>`}
                 </button>`
               : "waiting" in item
-                ? html`<p class="waiting">${this._failedDays.get(item.waiting) ?? localize("loading")}</p>`
+                ? html`<p class="waiting">${this._dayLoads.get(item.waiting) ?? localize("loading")}</p>`
                 : "group" in item
                   ? this._groupHeader(localize, item.group, item.record, originIcons)
                   : html`<notification-journal-record

@@ -1,6 +1,6 @@
 import { css, html, LitElement, nothing, svg, type PropertyValues, type TemplateResult } from "lit";
 
-import { type Clock, dayKey, formatter, numberFormatter, percentText } from "./format";
+import { type Clock, dayKey, formatter, numberFormatter, percentText, zoneName } from "./format";
 import { icon, mdiChevronLeft, mdiChevronRight, mdiFlashOutline } from "./icons";
 import { countText, type Localize } from "./localize";
 import { originGlyph, originName, originOfKey } from "./record";
@@ -177,7 +177,7 @@ export class NotificationJournalStatistics extends LitElement {
         period: this._period,
         offset: this._offset,
         first_weekday: firstWeekday(this.hass),
-        time_zone: this.clock.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+        time_zone: zoneName(this.clock),
       });
       if (request !== this._request) return;
       this._shape = shape(data);
