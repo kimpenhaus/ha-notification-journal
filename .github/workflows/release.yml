@@ -54,7 +54,7 @@ jobs:
 
   beta:
     # A tag v<version>-beta.<n> becomes a pre-release of that version; release-please leaves these tags alone.
-    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
