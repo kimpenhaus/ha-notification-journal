@@ -4,7 +4,7 @@ import { extname, join } from "node:path";
 import { chromium } from "playwright";
 
 const root = "/work";
-const types = { ".html": "text/html", ".js": "text/javascript" };
+const types = { ".html": "text/html", ".js": "text/javascript", ".svg": "image/svg+xml" };
 const server = createServer(async (req, res) => {
   const path = join(root, new URL(req.url, "http://x").pathname);
   try {

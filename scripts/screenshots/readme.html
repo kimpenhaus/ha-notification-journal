@@ -39,7 +39,7 @@
       const archive = new Set();
       const matches = (r, m) =>
         (!m.status || r.status === m.status) && (!m.channel || r.channel === m.channel || r.group === m.channel) &&
-        (!m.origin || originKey(r.origin) === m.origin) &&
+        (!m.origin || originKey(r.origin) === m.origin) && (!m.tag || r.data?.data?.tag === m.tag) &&
         (!m.since || Date.parse(r.time) >= Date.parse(m.since)) && (!m.until || Date.parse(r.time) < Date.parse(m.until)) &&
         (!m.text || JSON.stringify([r.title, r.message, r.recipients]).toLowerCase().includes(m.text.toLowerCase()));
       const hass = {
@@ -51,6 +51,7 @@
         states: { ...window.README_STATES },
         connection: {
           async sendMessagePromise(m) {
+            if (m.type === "auth/sign_path") return { path: m.path };
             if (m.type.endsWith("/facets")) return facets;
             if (m.type.endsWith("/statistics")) return statistics(m);
             if (m.type.endsWith("/archive")) { for (const id of m.record_ids) m.archived === false ? archive.delete(id) : archive.add(id); return { changed: m.record_ids.length }; }

@@ -24,10 +24,12 @@ import {
   mdiSelectRemove,
   mdiSortClockAscendingOutline,
   mdiSortClockDescendingOutline,
+  mdiTagOutline,
   mdiUnfoldLessHorizontal,
   mdiUnfoldMoreHorizontal,
 } from "./icons";
 import { countText, type Localize, localizer } from "./localize";
+import { type Signer, signPath } from "./media";
 import { originGlyph, originName } from "./record";
 import type { NotificationJournalStatistics } from "./statistics";
 import "./statistics";
@@ -56,6 +58,7 @@ const DEFAULT_FILTERS: Filters = {
   text: "",
   status: "",
   origin: "",
+  tag: "",
   period: "",
   newestFirst: true,
 };
@@ -164,6 +167,8 @@ export class NotificationJournalPanel extends LitElement {
     this._pending = 0;
   }
 
+  private readonly _sign: Signer = (path) => signPath(this._hass!.connection, path);
+
   get hass(): HomeAssistant | undefined {
     return this._hass;
   }
@@ -240,6 +245,7 @@ export class NotificationJournalPanel extends LitElement {
     if (filters.text.trim()) query.text = filters.text.trim();
     if (filters.status) query.status = filters.status;
     if (filters.origin) query.origin = filters.origin;
+    if (filters.tag) query.tag = filters.tag;
     if (this._archived) query.archived = true;
     if (this._view === "origin") query.group_by = "origin";
     if (typeof filters.period === "object") {
@@ -350,7 +356,7 @@ export class NotificationJournalPanel extends LitElement {
     this._archived = false;
     this._search = "";
     window.clearTimeout(this._searchTimer);
-    this._set({ text: "", status: "", origin: origin?.key ?? "", period: range });
+    this._set({ ...DEFAULT_FILTERS, newestFirst: this._filters.newestFirst, origin: origin?.key ?? "", period: range });
   }
 
   private _removed(recordId: string): void {
@@ -427,8 +433,10 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private get _unfiltered(): boolean {
-    const filters = this._filters;
-    return !filters.text.trim() && !filters.status && !filters.origin && !filters.period;
+    const { newestFirst: _order, text, ...rest } = this._filters;
+    return (
+      !text.trim() && Object.entries(rest).every(([key, value]) => value === DEFAULT_FILTERS[key as keyof Filters])
+    );
   }
 
   private _set(changes: Partial<Filters>): void {
@@ -716,6 +724,17 @@ export class NotificationJournalPanel extends LitElement {
                   </option>`,
               )}`,
           )}
+          ${
+            filters.tag
+              ? html`<button
+                  class="sort active tag-filter"
+                  title=${localize("remove_tag_filter")}
+                  @click=${() => this._set({ tag: "" })}
+                >
+                  ${icon(mdiTagOutline)}<span>${filters.tag}</span>${icon(mdiClose)}
+                </button>`
+              : nothing
+          }
         </div>
         <div class="options">
           <div class="view" role="group" aria-label=${localize("archive_view")}>
@@ -831,6 +850,7 @@ export class NotificationJournalPanel extends LitElement {
       <div
         class="list ${this._loading ? "busy" : ""}"
         @notification-select=${(event: CustomEvent<{ id: string }>) => this._select(event.detail.id)}
+        @notification-tag=${(event: CustomEvent<{ tag: string }>) => this._set({ tag: event.detail.tag })}
       >
         ${repeat(
           items,
@@ -852,6 +872,7 @@ export class NotificationJournalPanel extends LitElement {
                     .clock=${clock}
                     .userNames=${userNames}
                     .originIcons=${originIcons}
+                    .sign=${this._sign}
                     ?admin=${admin}
                     ?showDate=${byOrigin}
                     ?selectable=${this._selecting}
@@ -1012,9 +1033,18 @@ export class NotificationJournalPanel extends LitElement {
       text-overflow: ellipsis;
       cursor: pointer;
     }
-    .select.active select {
+    .select.active select,
+    .sort.active {
       border-color: var(--primary-color);
       background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
+    }
+    .tag-filter {
+      max-width: 220px;
+    }
+    .tag-filter span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     option,
     optgroup {

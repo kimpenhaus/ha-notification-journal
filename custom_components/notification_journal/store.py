@@ -209,6 +209,8 @@ class Query:
     origin: str | None = None
     """The key of an origin (`origin_key`): an automation or script, `integration.<domain>`, or a kind."""
     status: Status | None = None
+    tag: str | None = None
+    """The Companion app's tag (`data.tag`) the notifications were sent with."""
     since: datetime | None = None
     until: datetime | None = None
     newest_first: bool = True
@@ -691,6 +693,9 @@ class NotificationStore:
         if query.status is not None:
             where.append("status = ?")
             params.append(query.status.value)
+        if query.tag:
+            where.append("json_extract(data, '$.data.tag') = ?")
+            params.append(query.tag)
         if query.since is not None:
             where.append("time >= ?")
             params.append(query.since.timestamp())

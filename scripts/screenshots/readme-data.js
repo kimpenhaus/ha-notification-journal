@@ -25,6 +25,8 @@
     ],
   };
   const records = [
+    { ...base, ...family, id: "r11", time: at(0, 19, 58), source: "notify", channel: "notify.family", title: "Doorbell", message: "Someone is at the front door.", origin: automation("front_door_doorbell", "Front door: doorbell"), data: { data: { tag: "doorbell_ring", image: "/doorbell.svg" } } },
+    { ...base, id: "r12", time: at(0, 18, 50), source: "notify", channel: "notify.mobile_app_alex_phone", title: "Driveway", message: "The camera recorded motion.", recipients: [alex], origin: automation("driveway_motion", "Driveway: motion"), data: { data: { tag: "driveway_motion", image: "/driveway.svg", video: "/driveway.mp4" } } },
     { ...base, ...family, id: "r1", time: at(0, 18, 42), source: "notify", channel: "notify.family", title: "Laundry", message: "The washing machine is done.", origin: automation("laundry_done", "Laundry: done"), data: { data: { tag: "laundry" } } },
     { ...base, id: "r2", time: at(0, 18, 30), source: "speech", channel: "tts.speak", title: null, message: "Dinner is ready.", recipients: [speaker("kitchen", "Kitchen speaker"), speaker("living_room", "Living room speaker")], origin: automation("dinner_announcement", "Kitchen: dinner announcement"), data: { language: "en-US" } },
     { ...base, id: "r3", time: at(0, 17, 55), source: "persistent_notification", channel: "persistent_notification", title: "New devices discovered", message: "We discovered new devices on your network. [Check it out](/config/integrations/dashboard).", recipients: [everyone], origin: system, trace_path: null, source_ref: "config_entry_discovery" },
