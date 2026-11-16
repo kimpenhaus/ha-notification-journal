@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import tzinfo
+from datetime import date, datetime, time, timedelta, tzinfo
 from typing import Any
 
 import voluptuous as vol
@@ -111,6 +111,8 @@ def serialize(
         vol.Optional("archived", default=False): bool,
         vol.Optional("limit", default=50): vol.All(int, vol.Range(min=1, max=MAX_LIMIT)),
         vol.Optional("offset", default=0): vol.All(int, vol.Range(min=0)),
+        vol.Optional("days", default=False): bool,
+        vol.Optional("time_zone"): str,
     }
 )
 @websocket_api.async_response
@@ -119,6 +121,7 @@ async def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
     if (scope := _store_and_scope(hass, connection, msg)) is None:
         return
     store, user_id = scope
+    zone = await _time_zone(msg.get("time_zone")) if msg["days"] else None
     page = await store.async_query(
         Query(
             user_id=user_id,
@@ -136,6 +139,7 @@ async def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
             limit=msg["limit"],
             offset=msg["offset"],
             with_counts=msg["offset"] == 0,
+            days_in=zone,
         )
     )
     people = _people(hass)
@@ -145,7 +149,19 @@ async def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
         result["total"] = page.total
     if page.groups is not None:
         result["groups"] = page.groups
+    if page.days is not None and zone is not None:
+        result["days"] = [_day(day, count, zone) for day, count in page.days]
     connection.send_result(msg["id"], result)
+
+
+def _day(day: date, count: int, zone: tzinfo) -> dict[str, Any]:
+    """A day of the list with its notifications and its bounds, local midnight to local midnight."""
+    return {
+        "day": day.isoformat(),
+        "since": datetime.combine(day, time.min, zone).isoformat(),
+        "until": datetime.combine(day + timedelta(days=1), time.min, zone).isoformat(),
+        "count": count,
+    }
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get", vol.Required("record_id"): str})

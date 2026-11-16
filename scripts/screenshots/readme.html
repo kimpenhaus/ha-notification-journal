@@ -66,7 +66,15 @@
               groups = {};
               for (const r of list) groups[key(r)] = (groups[key(r)] ?? 0) + 1;
             }
-            return { records: list.slice(m.offset, m.offset + m.limit), total: list.length, groups };
+            let days;
+            if (m.days) {
+              const counts = {};
+              for (const r of list) counts[r.time.slice(0, 10)] = (counts[r.time.slice(0, 10)] ?? 0) + 1;
+              const next = (day) => new Date(Date.parse(day) + 86400000).toISOString().slice(0, 10);
+              days = Object.keys(counts).sort().map((day) => ({ day, since: `${day}T00:00:00+00:00`, until: `${next(day)}T00:00:00+00:00`, count: counts[day] }));
+              if (m.newest_first !== false) days.reverse();
+            }
+            return { records: list.slice(m.offset, m.offset + m.limit), total: list.length, groups, days };
           },
           async subscribeMessage() { return async () => {}; },
         },

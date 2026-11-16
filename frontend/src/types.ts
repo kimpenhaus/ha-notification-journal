@@ -61,6 +61,15 @@ export interface Page {
   records: NotificationRecord[];
   total?: number;
   groups?: Record<string, number>;
+  days?: Day[];
+}
+
+/** A day of the timeline with its notifications, from local midnight to local midnight. */
+export interface Day {
+  day: string;
+  since: string;
+  until: string;
+  count: number;
 }
 
 export type View = "time" | "origin";

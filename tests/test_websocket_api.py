@@ -1,7 +1,9 @@
 """Tests of the WebSocket commands and who sees what."""
 
-from datetime import timedelta
+from dataclasses import replace
+from datetime import UTC, datetime, time, timedelta
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from homeassistant.auth.models import User
 from homeassistant.core import HomeAssistant
@@ -120,6 +122,49 @@ async def test_list_by_tag(hass: HomeAssistant, hass_ws_client: WebSocketGenerat
     assert [r["id"] for r in result["records"]] == ["ring"]
 
 
+async def test_list_counts_days_in_the_callers_time_zone(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator, hass_admin_user: User
+) -> None:
+    runtime = await _setup(hass)
+    anna = [_person(hass_admin_user, "Anna")]
+    day = (dt_util.utcnow() - timedelta(days=3)).date()
+    times = {
+        "a": datetime.combine(day, time(23, 30), UTC),
+        "b": datetime.combine(day + timedelta(days=1), time(10), UTC),
+        "c": datetime.combine(day + timedelta(days=1), time(12), UTC),
+    }
+    for record_id, moment in times.items():
+        runtime.store.add(replace(_record(record_id, record_id, anna), time=moment))
+    await runtime.store.async_flush()
+    client = await hass_ws_client(hass)
+
+    auckland = (await _call(client, type=f"{DOMAIN}/list", days=True, time_zone="Pacific/Auckland"))["result"]
+    utc = (await _call(client, type=f"{DOMAIN}/list", days=True, time_zone="UTC", newest_first=False))["result"]
+    plain = (await _call(client, type=f"{DOMAIN}/list"))["result"]
+
+    zone = ZoneInfo("Pacific/Auckland")
+    newest = day + timedelta(days=2)
+    assert auckland["days"] == [
+        {
+            "day": newest.isoformat(),
+            "since": datetime.combine(newest, time.min, zone).isoformat(),
+            "until": datetime.combine(newest + timedelta(days=1), time.min, zone).isoformat(),
+            "count": 1,
+        },
+        {
+            "day": (day + timedelta(days=1)).isoformat(),
+            "since": datetime.combine(day + timedelta(days=1), time.min, zone).isoformat(),
+            "until": datetime.combine(newest, time.min, zone).isoformat(),
+            "count": 2,
+        },
+    ]
+    assert [(entry["day"], entry["count"]) for entry in utc["days"]] == [
+        (day.isoformat(), 1),
+        ((day + timedelta(days=1)).isoformat(), 2),
+    ]
+    assert "days" not in plain
+
+
 async def test_record_carries_exact_trace_path(
     hass: HomeAssistant, hass_ws_client: WebSocketGenerator, hass_admin_user: User, hass_read_only_user: User
 ) -> None:
@@ -148,6 +193,26 @@ async def test_user_sees_only_own_notifications(
     assert (await _call(client, type=f"{DOMAIN}/get", record_id="reader"))["success"]
     other = await _call(client, type=f"{DOMAIN}/get", record_id="admin")
     assert other["error"]["code"] == "not_found"
+
+
+async def test_days_count_only_what_the_user_sees(
+    hass: HomeAssistant,
+    hass_ws_client: WebSocketGenerator,
+    hass_admin_user: User,
+    hass_read_only_user: User,
+    hass_read_only_access_token: str,
+) -> None:
+    runtime = await _setup(hass)
+    await _fill(runtime, hass_admin_user, hass_read_only_user)
+    client = await hass_ws_client(hass, hass_read_only_access_token)
+    await _call(client, type=f"{DOMAIN}/archive", record_ids=["family"], archived=True)
+
+    active = (await _call(client, type=f"{DOMAIN}/list", days=True))["result"]
+    archived = (await _call(client, type=f"{DOMAIN}/list", days=True, archived=True))["result"]
+
+    assert [r["id"] for r in active["records"]] == ["reader"]
+    assert sum(day["count"] for day in active["days"]) == active["total"] == 1
+    assert sum(day["count"] for day in archived["days"]) == archived["total"] == 1
 
 
 async def test_non_admins_see_nothing_when_configured(
