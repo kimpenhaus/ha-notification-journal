@@ -125,13 +125,10 @@ export class NotificationJournalPanel extends LitElement {
   declare _pending: number;
   declare _view: View;
   declare _groups: Record<string, number>;
-  /** Sections opened or closed by hand; the others follow `_folding`. */
   declare _folded: Map<string, boolean>;
-  /** Whether sections start collapsed, all but `_newest`. */
   private _folding = false;
   private _newest: string | undefined;
-  /** Whether the next list loaded starts folded anew. */
-  private _refold = true;
+  private _newestLater = false;
   declare _notice: string | undefined;
   declare _archived: boolean;
   declare _selecting: boolean;
@@ -230,7 +227,7 @@ export class NotificationJournalPanel extends LitElement {
       type: "notification_journal/subscribe",
     });
     this._unsubscribe.catch(() => (this._unsubscribe = undefined));
-    void this._load();
+    void this._load(false, true);
     void this._loadFacets();
   }
 
@@ -263,8 +260,9 @@ export class NotificationJournalPanel extends LitElement {
     return query;
   }
 
-  private async _load(more = false): Promise<void> {
+  private async _load(more = false, refold = false): Promise<void> {
     if (!this._hass) return;
+    const before = new Set(this._sections());
     const request = ++this._request;
     this._loading = true;
     try {
@@ -288,10 +286,10 @@ export class NotificationJournalPanel extends LitElement {
         this._records = page.records;
         this._pending = 0;
       }
-      if (this._refold && !more) this._fold();
-      else this._newest = this._newestDay();
       if (page.total !== undefined) this._total = page.total;
       if (page.groups !== undefined || !more) this._groups = page.groups ?? {};
+      if (refold) this._fold();
+      else this._openNewDays(before, more);
       this._error = undefined;
     } catch (error) {
       if (request !== this._request) return;
@@ -329,14 +327,11 @@ export class NotificationJournalPanel extends LitElement {
     }
     const { change, record } = event;
     const index = this._records.findIndex((known) => known.id === record.id);
-    const day = `day-${dayKey(this._clock, record.time)}`;
-    if (index < 0 && this._folding && !this._sections().includes(day)) {
-      this._folded = new Map(this._folded).set(day, false);
-    }
     if (index >= 0) {
       this._records = this._records.map((known, position) => (position === index ? record : known));
     } else if (change === "added" && !this._archived) {
       if (this._unfiltered && this._complete) {
+        this._openNewDays(new Set(this._sections()), false, [record]);
         const first = this._records[0];
         this._records = [record, ...this._records];
         this._total += 1;
@@ -384,6 +379,7 @@ export class NotificationJournalPanel extends LitElement {
     const groups = { ...this._groups };
     for (const record of gone) if (groups[groupKey(record)]) groups[groupKey(record)] -= 1;
     this._groups = groups;
+    if (this._newest && !this._sections().includes(this._newest)) this._newest = this._newestDay();
   }
 
   private async _archive(): Promise<void> {
@@ -426,8 +422,7 @@ export class NotificationJournalPanel extends LitElement {
     this._archived = archived;
     this._endSelection();
     this.renderRoot.querySelector(".content")?.scrollTo({ top: 0 });
-    this._refold = true;
-    void this._load();
+    void this._load(false, true);
   }
 
   private _toggle(section: string): void {
@@ -438,18 +433,41 @@ export class NotificationJournalPanel extends LitElement {
     return this._folded.get(section) ?? (this._folding && section !== this._newest);
   }
 
-  /** The timeline without filters opens with only the newest day expanded; with a filter or by origin all are open. */
   private _fold(): void {
-    this._refold = false;
     this._folding = this._view === "time" && this._unfiltered;
-    this._newest = this._newestDay();
+    this._newestLater = !this._filters.newestFirst && !this._complete;
+    this._newest = this._newestLater ? undefined : this._newestDay();
     this._folded = new Map();
   }
 
   private _foldEvery(collapsed: boolean): void {
     this._folding = collapsed;
+    this._newestLater = false;
     this._newest = undefined;
     this._folded = new Map();
+  }
+
+  /**
+   * Opens the days that arrived newer than the open one, as nothing collapses by itself. Oldest first, the newest day
+   * is known only once the last page is loaded.
+   */
+  private _openNewDays(before: Set<string>, more: boolean, records = this._records): void {
+    if (!this._folding || this._view !== "time") return;
+    if (more) {
+      if (this._newestLater && this._complete) {
+        this._newestLater = false;
+        this._newest = this._newestDay();
+      }
+      return;
+    }
+    const newest = this._newest;
+    if (newest === undefined) return;
+    const opened = new Map(this._folded);
+    for (const record of records) {
+      const day = `day-${dayKey(this._clock, record.time)}`;
+      if (!before.has(day) && day > newest) opened.set(day, false);
+    }
+    if (opened.size !== this._folded.size) this._folded = opened;
   }
 
   private _newestDay(): string | undefined {
@@ -483,8 +501,7 @@ export class NotificationJournalPanel extends LitElement {
       this._arrange();
       this._fold();
     } else {
-      this._refold = true;
-      void this._load();
+      void this._load(false, true);
     }
   }
 
@@ -517,8 +534,7 @@ export class NotificationJournalPanel extends LitElement {
       this._arrange();
       this._fold();
     } else {
-      this._refold = true;
-      void this._load();
+      void this._load(false, true);
     }
   }
 
@@ -574,7 +590,14 @@ export class NotificationJournalPanel extends LitElement {
     if (!this._observer) {
       this._observer = new IntersectionObserver(
         (entries) => {
-          if (entries.some((entry) => entry.isIntersecting) && !this._loading && this._records.length < this._total) {
+          const last = this._sections().at(-1);
+          const reading = last === undefined || !this._isCollapsed(last);
+          if (
+            entries.some((entry) => entry.isIntersecting) &&
+            reading &&
+            !this._loading &&
+            this._records.length < this._total
+          ) {
             void this._load(true);
           }
         },
