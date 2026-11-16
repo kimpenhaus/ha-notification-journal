@@ -14,8 +14,9 @@ const VIDEO_FILES = /\.(mp4|m4v|mov|webm|avi|mpe?g)$/i;
 const AUDIO_FILES = /\.(mp3|m4a|wav|aiff?|aac|ogg)$/i;
 
 const SIGNED_FOR = 3600;
-const SIGN_AGAIN_AFTER = 3000 * 1000;
-const signed = new Map<string, { until: number; path: Promise<string> }>();
+const SIGN_AGAIN_AFTER = (SIGNED_FOR - 600) * 1000;
+const PRUNE_ABOVE = 200;
+const signed = new Map<string, { until: number; path: Promise<string>; value?: string }>();
 
 export type Signer = (path: string) => Promise<string>;
 
@@ -23,6 +24,15 @@ export type Signer = (path: string) => Promise<string>;
 export function appData(record: NotificationRecord): Record<string, unknown> {
   const inner = record.data?.["data"];
   return inner && typeof inner === "object" && !Array.isArray(inner) ? (inner as Record<string, unknown>) : {};
+}
+
+function kindOf(text: string, video: RegExp, audio: RegExp): keyof Media | undefined {
+  if (video.test(text)) return "video";
+  return audio.test(text) ? "audio" : undefined;
+}
+
+function pathOf(address: string): string {
+  return address.split(/[?#]/)[0] ?? address;
 }
 
 /**
@@ -37,11 +47,11 @@ export function notificationMedia(record: NotificationRecord): Media {
     const { url, "content-type": type } = attachment as Record<string, unknown>;
     const address = safeUrl(url);
     if (address) {
-      const kind = typeof type === "string" ? type : "";
-      const file = address.split(/[?#]/)[0] ?? "";
-      if (VIDEO_TYPES.test(kind) || (!AUDIO_TYPES.test(kind) && VIDEO_FILES.test(file))) media.video ??= address;
-      else if (AUDIO_TYPES.test(kind) || AUDIO_FILES.test(file)) media.audio ??= address;
-      else media.image ??= address;
+      const kind =
+        kindOf(typeof type === "string" ? type : "", VIDEO_TYPES, AUDIO_TYPES) ??
+        kindOf(pathOf(address), VIDEO_FILES, AUDIO_FILES) ??
+        "image";
+      media[kind] ??= address;
     }
   }
   return media;
@@ -72,15 +82,20 @@ function ownPath(address: string): string | undefined {
  * that the browser does not send for images and videos. Signed paths are kept until shortly before they expire.
  */
 export function loadable(address: string, sign: Signer | undefined): string | Promise<string> {
-  const path = sign ? ownPath(address) : undefined;
+  const path = sign && ownPath(address);
   if (!sign || path === undefined) return address;
   const now = Date.now();
   const known = signed.get(path);
-  if (known && known.until > now) return known.path;
-  for (const [key, entry] of signed) if (entry.until <= now) signed.delete(key);
-  const result = sign(path).catch(() => address);
-  signed.set(path, { until: now + SIGN_AGAIN_AFTER, path: result });
-  return result;
+  if (known && known.until > now) return known.value ?? known.path;
+  if (signed.size > PRUNE_ABOVE) for (const [key, entry] of signed) if (entry.until <= now) signed.delete(key);
+  const entry: { until: number; path: Promise<string>; value?: string } = {
+    until: now + SIGN_AGAIN_AFTER,
+    path: sign(path)
+      .catch(() => address)
+      .then((value) => (entry.value = value)),
+  };
+  signed.set(path, entry);
+  return entry.path;
 }
 
 /** The tag a notification was sent with: a newer one with the same tag replaces it on the phone. */
@@ -91,7 +106,7 @@ export function notificationTag(record: NotificationRecord): string | undefined 
 
 /** The name of the file an address points to. */
 export function fileName(address: string): string {
-  const path = address.split(/[?#]/)[0] ?? address;
+  const path = pathOf(address);
   const name = path.slice(path.lastIndexOf("/") + 1);
   try {
     return decodeURIComponent(name) || address;

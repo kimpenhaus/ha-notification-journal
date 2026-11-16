@@ -356,7 +356,7 @@ export class NotificationJournalPanel extends LitElement {
     this._archived = false;
     this._search = "";
     window.clearTimeout(this._searchTimer);
-    this._set({ text: "", status: "", origin: origin?.key ?? "", tag: "", period: range });
+    this._set({ ...DEFAULT_FILTERS, newestFirst: this._filters.newestFirst, origin: origin?.key ?? "", period: range });
   }
 
   private _removed(recordId: string): void {
@@ -433,8 +433,10 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private get _unfiltered(): boolean {
-    const filters = this._filters;
-    return !filters.text.trim() && !filters.status && !filters.origin && !filters.tag && !filters.period;
+    const { newestFirst: _order, text, ...rest } = this._filters;
+    return (
+      !text.trim() && Object.entries(rest).every(([key, value]) => value === DEFAULT_FILTERS[key as keyof Filters])
+    );
   }
 
   private _set(changes: Partial<Filters>): void {
@@ -725,7 +727,7 @@ export class NotificationJournalPanel extends LitElement {
           ${
             filters.tag
               ? html`<button
-                  class="tag-filter"
+                  class="sort active tag-filter"
                   title=${localize("remove_tag_filter")}
                   @click=${() => this._set({ tag: "" })}
                 >
@@ -1031,34 +1033,18 @@ export class NotificationJournalPanel extends LitElement {
       text-overflow: ellipsis;
       cursor: pointer;
     }
-    .select.active select {
+    .select.active select,
+    .sort.active {
       border-color: var(--primary-color);
       background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
     }
     .tag-filter {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      height: 34px;
       max-width: 220px;
-      padding: 0 10px;
-      border-radius: 17px;
-      border: 1px solid var(--primary-color);
-      background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
-      color: var(--primary-text-color);
-      font: inherit;
-      font-size: 0.875rem;
-      cursor: pointer;
     }
     .tag-filter span {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-    }
-    .tag-filter .icon {
-      width: 18px;
-      height: 18px;
-      color: var(--secondary-text-color);
     }
     option,
     optgroup {

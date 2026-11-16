@@ -1,4 +1,5 @@
 import { css, html, LitElement, nothing, type PropertyValues, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 
 import { channelLabel, type Clock, dateTimeText, dayKey, initials, shortDateTimeText, timeText } from "./format";
 import {
@@ -129,18 +130,15 @@ export function recipientChip(recipient: Recipient): TemplateResult {
   return html`<span class="chip recipient ${recipient.kind}" title=${recipient.id}>${avatar}${recipient.name}</span>`;
 }
 
-/** Loads the first frame of a video only once its card comes near the screen. */
-const frames = new IntersectionObserver(
-  (entries) => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      const video = entry.target as HTMLVideoElement;
-      frames.unobserve(video);
-      if (video.dataset.src) video.src = video.dataset.src;
-    }
-  },
-  { rootMargin: "300px" },
-);
+/** Loads the first frame of a video only once its card is on the screen. */
+const frames = new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    const video = entry.target as HTMLVideoElement;
+    frames.unobserve(video);
+    if (video.dataset.src) video.src = video.dataset.src;
+  }
+});
 
 export class NotificationJournalRecord extends LitElement {
   static override properties = {
@@ -175,6 +173,7 @@ export class NotificationJournalRecord extends LitElement {
   declare _sources: ReadonlyMap<string, string>;
   declare sign: Signer | undefined;
   private _found: Media = {};
+  private _frame: Element | undefined;
   declare selectable: boolean;
   declare selected: boolean;
 
@@ -261,19 +260,18 @@ export class NotificationJournalRecord extends LitElement {
 
   protected override willUpdate(changed: PropertyValues): void {
     super.willUpdate(changed);
-    if (changed.has("record") || changed.has("sign")) this._resolve();
-  }
-
-  protected override updated(changed: PropertyValues): void {
-    super.updated(changed);
-    for (const video of this.renderRoot.querySelectorAll<HTMLVideoElement>("video.frame:not([src])")) {
-      frames.observe(video);
+    if (!changed.has("record") && !changed.has("sign")) return;
+    const media = notificationMedia(this.record);
+    const found = this._found;
+    if (
+      changed.has("sign") ||
+      media.image !== found.image ||
+      media.video !== found.video ||
+      media.audio !== found.audio
+    ) {
+      this._found = media;
+      this._resolve(media);
     }
-  }
-
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    for (const video of this.renderRoot.querySelectorAll("video.frame")) frames.unobserve(video);
   }
 
   private _fail(address: string): void {
@@ -281,9 +279,7 @@ export class NotificationJournalRecord extends LitElement {
   }
 
   /** Resolves where to load the media from, signing paths on this Home Assistant. */
-  private _resolve(): void {
-    const record = this.record;
-    const media = notificationMedia(record);
+  private _resolve(media: Media): void {
     const sources = new Map<string, string>();
     const pending: Promise<[string, string]>[] = [];
     for (const address of [media.image, media.video, media.audio]) {
@@ -292,12 +288,21 @@ export class NotificationJournalRecord extends LitElement {
       if (typeof source === "string") sources.set(address, source);
       else pending.push(source.then((path) => [address, path]));
     }
-    this._found = media;
     this._sources = sources;
     if (!pending.length) return;
     void Promise.all(pending).then((entries) => {
-      if (this.record === record) this._sources = new Map([...sources, ...entries]);
+      if (this._found === media) this._sources = new Map([...sources, ...entries]);
     });
+  }
+
+  private _observeFrame(video: Element | undefined): void {
+    if (this._frame) frames.unobserve(this._frame);
+    this._frame = video;
+    if (video) frames.observe(video);
+  }
+
+  private _usable(address: string | undefined): string | undefined {
+    return address && !this._failed.has(address) ? address : undefined;
   }
 
   /** An image, or a video with the image or its first frame as preview; a link for audio and what cannot load. */
@@ -305,76 +310,88 @@ export class NotificationJournalRecord extends LitElement {
     const { image, video, audio } = this._found;
     if (!image && !video && !audio) return nothing;
     const localize = this.localize;
-    const sources = this._sources;
-    const usable = (address: string | undefined) => (address && !this._failed.has(address) ? address : undefined);
-    const link = (address: string, glyph: string, label: string, unavailable = false) =>
-      html`<a class="chip media-link" href=${sources.get(address) ?? address} target="_blank" rel="noopener noreferrer"
-        >${icon(glyph)}${label}<span class="media-name"
-          >· ${unavailable ? `${localize("media_unavailable")} · ` : ""}${fileName(address)}</span
-        ></a
-      >`;
-    const imagePreview = (address: string) => {
-      const source = sources.get(address);
-      return source
-        ? html`<a
-            class="preview"
-            href=${source}
-            target="_blank"
-            rel="noopener noreferrer"
-            title=${localize("open_image")}
-            ><img src=${source} alt="" loading="lazy" @error=${() => this._fail(address)}
-          /></a>`
-        : nothing;
-    };
-    const parts: (TemplateResult | typeof nothing)[] = [];
-    const poster = usable(image);
-    if (video && usable(video)) {
-      const source = sources.get(video);
-      const posterSource = poster ? sources.get(poster) : undefined;
-      if (!source) {
-        parts.push(nothing);
-      } else if (this._playing) {
-        parts.push(
-          html`<video
-            class="player"
-            src=${source}
-            poster=${posterSource ?? nothing}
-            controls
-            autoplay
-            playsinline
-            @error=${() => {
-              this._playing = false;
-              this._fail(video);
-            }}
-          ></video>`,
-        );
-      } else {
-        parts.push(
-          html`<button class="preview video" title=${localize("play_video")} @click=${() => (this._playing = true)}>
-            ${
+    const poster = this._usable(image);
+    const playable = this._usable(video);
+    return html`<div class="media">
+      ${
+        playable
+          ? this._video(playable, poster)
+          : html`${
               poster
-                ? html`<img src=${posterSource ?? nothing} alt="" loading="lazy" @error=${() => this._fail(poster)} />`
-                : html`<video
-                    class="frame"
-                    data-src="${source}#t=0.1"
-                    preload="metadata"
-                    muted
-                    playsinline
-                    @error=${() => this._fail(video)}
-                  ></video>`
+                ? this._image(poster)
+                : image
+                  ? this._mediaLink(image, mdiImageOffOutline, localize("open_image"), true)
+                  : nothing
             }
-            <span class="play">${icon(mdiPlay)}</span>
-            <span class="caption">${fileName(video)}</span>
-          </button>`,
-        );
+            ${video ? this._mediaLink(video, mdiVideoOutline, localize("play_video"), true) : nothing}`
       }
-    } else {
-      if (poster) parts.push(imagePreview(poster));
-      else if (image) parts.push(link(image, mdiImageOffOutline, localize("open_image"), true));
-      if (video) parts.push(link(video, mdiVideoOutline, localize("play_video"), true));
+      ${audio ? this._mediaLink(audio, mdiVolumeHigh, localize("play_audio")) : nothing}
+    </div>`;
+  }
+
+  private _mediaLink(address: string, glyph: string, label: string, unavailable = false): TemplateResult {
+    const note = unavailable ? `${this.localize("media_unavailable")} · ` : "";
+    return html`<a
+      class="chip link media-link"
+      href=${this._sources.get(address) ?? address}
+      target="_blank"
+      rel="noopener noreferrer"
+      >${icon(glyph)}${label}<span class="media-name">· ${note}${fileName(address)}</span></a
+    >`;
+  }
+
+  private _image(address: string): TemplateResult | typeof nothing {
+    const source = this._sources.get(address);
+    if (!source) return nothing;
+    return html`<a
+      class="preview"
+      href=${source}
+      target="_blank"
+      rel="noopener noreferrer"
+      title=${this.localize("open_image")}
+      ><img src=${source} alt="" loading="lazy" @error=${() => this._fail(address)}
+    /></a>`;
+  }
+
+  private _video(address: string, poster: string | undefined): TemplateResult | typeof nothing {
+    const source = this._sources.get(address);
+    if (!source) return nothing;
+    const posterSource = poster ? this._sources.get(poster) : undefined;
+    if (this._playing) {
+      return html`<video
+        class="player"
+        src=${source}
+        poster=${posterSource ?? nothing}
+        controls
+        autoplay
+        playsinline
+        @error=${() => {
+          this._playing = false;
+          this._fail(address);
+        }}
+      ></video>`;
     }
-    if (audio) parts.push(link(audio, mdiVolumeHigh, localize("play_audio")));
-    return html`<div class="media">${parts}</div>`;
+    return html`<button
+      class="preview video"
+      title=${this.localize("play_video")}
+      @click=${() => (this._playing = true)}
+    >
+      ${
+        poster
+          ? html`<img src=${posterSource ?? nothing} alt="" loading="lazy" @error=${() => this._fail(poster)} />`
+          : html`<video
+              class="frame"
+              data-src="${source}#t=0.1"
+              preload="metadata"
+              muted
+              playsinline
+              ${ref((element) => this._observeFrame(element))}
+              @error=${() => this._fail(address)}
+            ></video>`
+      }
+      <span class="play">${icon(mdiPlay)}</span>
+      <span class="caption">${fileName(address)}</span>
+    </button>`;
   }
 
   private _tag(): TemplateResult | typeof nothing {
@@ -394,7 +411,7 @@ export class NotificationJournalRecord extends LitElement {
     if (!this.selectable) return;
     const interactive = event
       .composedPath()
-      .some((target) => target instanceof HTMLElement && ["A", "BUTTON", "VIDEO"].includes(target.tagName));
+      .some((target) => target instanceof Element && target.matches("a, button, video, input, select, textarea"));
     if (interactive) return;
     this.dispatchEvent(
       new CustomEvent("notification-select", { detail: { id: this.record.id }, bubbles: true, composed: true }),
@@ -839,14 +856,6 @@ export class NotificationJournalRecord extends LitElement {
     }
     .chip.tag {
       color: var(--secondary-text-color);
-      cursor: pointer;
-    }
-    .chip.tag:hover {
-      background: color-mix(in srgb, var(--primary-color) 8%, transparent);
-    }
-    .chip.tag .icon {
-      width: 16px;
-      height: 16px;
     }
     .media {
       display: flex;
@@ -863,8 +872,7 @@ export class NotificationJournalRecord extends LitElement {
       box-sizing: border-box;
       padding: 0;
       overflow: hidden;
-      border: 1px solid var(--divider-color);
-      border-radius: var(--ha-card-border-radius, 12px);
+      ${surface}
       background: var(--secondary-background-color);
       font: inherit;
       cursor: zoom-in;
@@ -924,10 +932,6 @@ export class NotificationJournalRecord extends LitElement {
     .chip.media-link {
       border-radius: 6px;
       color: var(--primary-color);
-    }
-    .media-link .icon {
-      width: 18px;
-      height: 18px;
     }
     .media-name {
       color: var(--secondary-text-color);
