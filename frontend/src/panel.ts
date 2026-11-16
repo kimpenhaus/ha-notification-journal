@@ -35,6 +35,7 @@ import type { NotificationJournalStatistics } from "./statistics";
 import "./statistics";
 import { controlStyles } from "./styles";
 import type {
+  Day,
   Facets,
   Filters,
   HomeAssistant,
@@ -50,6 +51,7 @@ import type {
 import { errorMessage, store, stored } from "./util";
 
 const PAGE_SIZE = 50;
+const DAY_PAGE_SIZE = 200;
 const ARCHIVE_BATCH = 200;
 const SEARCH_DELAY = 300;
 const PERIODS: Record<Exclude<Period, "">, number> = { day: 1, week: 7, month: 30, quarter: 90 };
@@ -66,7 +68,10 @@ const VIEW_KEY = "notification_journal.view";
 const ORDER_KEY = "notification_journal.newest_first";
 
 type Item =
-  { day: string; collapsed: boolean } | { group: string; record: NotificationRecord } | { record: NotificationRecord };
+  | { day: string; collapsed: boolean; count?: number }
+  | { group: string; record: NotificationRecord }
+  | { record: NotificationRecord }
+  | { waiting: string };
 
 /** The key of an origin's group, the same as `origin_key` in the store. */
 function groupKey(record: NotificationRecord): string {
@@ -107,6 +112,7 @@ export class NotificationJournalPanel extends LitElement {
     _view: { state: true },
     _groups: { state: true },
     _folded: { state: true },
+    _days: { state: true },
     _notice: { state: true },
     _archived: { state: true },
     _selecting: { state: true },
@@ -127,6 +133,10 @@ export class NotificationJournalPanel extends LitElement {
   declare _view: View;
   declare _groups: Record<string, number>;
   declare _folded: Map<string, boolean>;
+  /** Every day of the plain timeline; its notifications load when a day opens. Unset while the list pages. */
+  declare _days: Day[] | undefined;
+  private _loadedDays = new Set<string>();
+  private _loadingDays = new Set<string>();
   private _open: "all" | "none" | "later" | `day-${string}` = "later";
   private _foldedFor = "";
   declare _notice: string | undefined;
@@ -265,11 +275,15 @@ export class NotificationJournalPanel extends LitElement {
     const request = ++this._request;
     this._loading = true;
     try {
+      const byDay = this._byDay && !more;
       const page = await this._hass.connection.sendMessagePromise<Page>({
         type: "notification_journal/list",
         ...this._query(),
         limit: PAGE_SIZE,
         offset: more ? this._records.length : 0,
+        ...(byDay
+          ? { days: true, time_zone: this._clock.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone }
+          : {}),
       });
       if (request !== this._request) return;
       if (more) {
@@ -284,6 +298,9 @@ export class NotificationJournalPanel extends LitElement {
       } else {
         this._records = page.records;
         this._pending = 0;
+        this._days = byDay ? (page.days ?? []) : undefined;
+        this._loadedDays = this._wholeDays(page.records);
+        this._loadingDays = new Set();
       }
       if (page.total !== undefined) this._total = page.total;
       if (page.groups !== undefined || !more) this._groups = page.groups ?? {};
@@ -328,7 +345,9 @@ export class NotificationJournalPanel extends LitElement {
     if (index >= 0) {
       this._records = this._records.map((known, position) => (position === index ? record : known));
     } else if (change === "added" && !this._archived) {
-      if (this._unfiltered && this._complete) {
+      if (this._days) {
+        this._count(record, 1);
+      } else if (this._unfiltered && this._complete) {
         const first = this._records[0];
         this._records = [record, ...this._records];
         this._total += 1;
@@ -370,8 +389,12 @@ export class NotificationJournalPanel extends LitElement {
   private _drop(recordIds: string[]): void {
     const ids = new Set(recordIds);
     const gone = this._records.filter((known) => ids.has(known.id));
-    if (!gone.length) return;
+    if (!gone.length) {
+      if (this._days) void this._load();
+      return;
+    }
     this._records = this._records.filter((known) => !ids.has(known.id));
+    if (this._days) for (const record of gone) this._count(record, -1);
     this._total = Math.max(0, this._total - gone.length);
     const groups = { ...this._groups };
     for (const record of gone) if (groups[groupKey(record)]) groups[groupKey(record)] -= 1;
@@ -448,11 +471,10 @@ export class NotificationJournalPanel extends LitElement {
    */
   private _settle(): void {
     const open = this._open;
-    if (open === "all" || open === "none") return;
-    if (open === "later" && !this._filters.newestFirst && !this._complete) return;
-    const newest = this._filters.newestFirst ? this._records[0] : this._records.at(-1);
-    if (!newest) return;
-    const day = `day-${dayKey(this._clock, newest.time)}` as const;
+    const days = this._days;
+    if (open === "all" || open === "none" || !days?.length) return;
+    const newest = this._filters.newestFirst ? days[0]! : days.at(-1)!;
+    const day = `day-${newest.day}` as const;
     if (open === "later" || day < open) this._open = day;
   }
 
@@ -466,7 +488,82 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private _sections(): string[] {
+    if (this._days) return this._days.map((day) => `day-${day.day}`);
     return [...new Set(this._records.map((record) => this._sectionKey(record)))];
+  }
+
+  private get _byDay(): boolean {
+    return this._view === "time" && this._unfiltered;
+  }
+
+  /** The days of which every notification is among the records. */
+  private _wholeDays(records: NotificationRecord[]): Set<string> {
+    const counts = new Map<string, number>();
+    for (const record of records) {
+      const day = dayKey(this._clock, record.time);
+      counts.set(day, (counts.get(day) ?? 0) + 1);
+    }
+    return new Set((this._days ?? []).filter((day) => counts.get(day.day) === day.count).map((day) => day.day));
+  }
+
+  /** Counts a notification that arrived or went into its day; a day not listed yet loads the days anew. */
+  private _count(record: NotificationRecord, change: 1 | -1): void {
+    const key = dayKey(this._clock, record.time);
+    const day = this._days?.find((known) => known.day === key);
+    if (!day) {
+      void this._load();
+      return;
+    }
+    const count = day.count + change;
+    this._days = count
+      ? this._days!.map((known) => (known === day ? { ...known, count } : known))
+      : this._days!.filter((known) => known !== day);
+    this._total = Math.max(0, this._total + change);
+    if (change > 0 && this._loadedDays.has(key)) {
+      this._records = [...this._records, record];
+      this._arrange();
+    }
+  }
+
+  /** Loads the notifications of the open days not loaded yet, in one span from the oldest to the newest of them. */
+  private async _loadOpenDays(): Promise<void> {
+    const wanted = (this._days ?? []).filter(
+      (day) =>
+        !this._loadedDays.has(day.day) && !this._loadingDays.has(day.day) && !this._isCollapsed(`day-${day.day}`),
+    );
+    if (!wanted.length || !this._hass) return;
+    const since = wanted.reduce((first, day) => (day.since < first ? day.since : first), wanted[0]!.since);
+    const until = wanted.reduce((last, day) => (day.until > last ? day.until : last), wanted[0]!.until);
+    const inSpan = (this._days ?? []).filter((day) => day.since >= since && day.until <= until).map((day) => day.day);
+    for (const day of inSpan) this._loadingDays.add(day);
+    const request = this._request;
+    const fresh: NotificationRecord[] = [];
+    try {
+      for (let offset = 0; ; offset += DAY_PAGE_SIZE) {
+        const page = await this._hass.connection.sendMessagePromise<Page>({
+          type: "notification_journal/list",
+          ...this._query(),
+          since,
+          until,
+          limit: DAY_PAGE_SIZE,
+          offset,
+        });
+        if (request !== this._request) return;
+        fresh.push(...page.records);
+        if (page.records.length < DAY_PAGE_SIZE) break;
+      }
+      const known = new Set(this._records.map((record) => record.id));
+      this._records = [...this._records, ...fresh.filter((record) => !known.has(record.id))];
+      this._arrange();
+      this._loadedDays = new Set([...this._loadedDays, ...inSpan]);
+    } catch (error) {
+      if (request === this._request) this._notice = this._localize("load_failed", { message: errorMessage(error) });
+    } finally {
+      if (request === this._request) {
+        for (const day of inSpan) this._loadingDays.delete(day);
+        this.requestUpdate();
+      }
+    }
   }
 
   private get _unfiltered(): boolean {
@@ -484,7 +581,8 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private _rearrange(local: boolean): void {
-    if (local && this._complete && !this._loading) {
+    const whole = this._days ? this._byDay : this._complete && !this._byDay;
+    if (local && whole && !this._loading) {
       this._arrange();
       this._refold();
     } else {
@@ -559,10 +657,15 @@ export class NotificationJournalPanel extends LitElement {
       records.sort(byTime);
     }
     this._records = records;
+    if (this._days) {
+      const order = this._filters.newestFirst ? -1 : 1;
+      this._days = [...this._days].sort((left, right) => order * compare(left.day, right.day));
+    }
   }
 
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
+    if (this._days && !this._loading) void this._loadOpenDays();
     const sentinel = this.renderRoot.querySelector(".sentinel.auto");
     if (!sentinel) {
       this._observer?.disconnect();
@@ -853,7 +956,7 @@ export class NotificationJournalPanel extends LitElement {
         <p>${this._error}</p>
       </div>`;
     }
-    if (!this._records.length) {
+    if (this._days ? !this._days.length : !this._records.length) {
       if (this._loading) return html`<div class="empty"><p>${localize("loading")}</p></div>`;
       return this._unfiltered
         ? html`<div class="empty">
@@ -872,16 +975,33 @@ export class NotificationJournalPanel extends LitElement {
     const { userNames, originIcons } = this._lookups();
     const byOrigin = this._view === "origin";
     const items: Item[] = [];
-    let section = "";
     let collapsed = false;
-    for (const record of this._records) {
-      const key = byOrigin ? groupKey(record) : dayKey(clock, record.time);
-      if (key !== section) {
-        section = key;
-        collapsed = this._isCollapsed(byOrigin ? `group-${key}` : `day-${key}`);
-        items.push(byOrigin ? { group: key, record } : { day: key, collapsed });
+    if (this._days) {
+      const byDay = new Map<string, NotificationRecord[]>();
+      for (const record of this._records) {
+        const key = dayKey(clock, record.time);
+        const list = byDay.get(key);
+        if (list) list.push(record);
+        else byDay.set(key, [record]);
       }
-      if (!collapsed) items.push({ record });
+      for (const { day, count } of this._days) {
+        collapsed = this._isCollapsed(`day-${day}`);
+        items.push({ day, collapsed, count });
+        if (collapsed) continue;
+        if (this._loadedDays.has(day)) for (const record of byDay.get(day) ?? []) items.push({ record });
+        else items.push({ waiting: day });
+      }
+    } else {
+      let section = "";
+      for (const record of this._records) {
+        const key = byOrigin ? groupKey(record) : dayKey(clock, record.time);
+        if (key !== section) {
+          section = key;
+          collapsed = this._isCollapsed(byOrigin ? `group-${key}` : `day-${key}`);
+          items.push(byOrigin ? { group: key, record } : { day: key, collapsed });
+        }
+        if (!collapsed) items.push({ record });
+      }
     }
     return html`
       ${
@@ -898,7 +1018,14 @@ export class NotificationJournalPanel extends LitElement {
       >
         ${repeat(
           items,
-          (item) => ("day" in item ? `day-${item.day}` : "group" in item ? `group-${item.group}` : item.record.id),
+          (item) =>
+            "day" in item
+              ? `day-${item.day}`
+              : "group" in item
+                ? `group-${item.group}`
+                : "waiting" in item
+                  ? `waiting-${item.waiting}`
+                  : item.record.id,
           (item) =>
             "day" in item
               ? html`<button
@@ -907,25 +1034,28 @@ export class NotificationJournalPanel extends LitElement {
                   @click=${() => this._toggle(`day-${item.day}`)}
                 >
                   ${icon(mdiChevronDown)}<span>${dayLabel(clock, localize, item.day)}</span>
+                  ${item.count === undefined ? nothing : html`<span class="group-count">${item.count}</span>`}
                 </button>`
-              : "group" in item
-                ? this._groupHeader(localize, item.group, item.record, originIcons)
-                : html`<notification-journal-record
-                    .record=${item.record}
-                    .localize=${localize}
-                    .clock=${clock}
-                    .userNames=${userNames}
-                    .originIcons=${originIcons}
-                    .sign=${this._sign}
-                    ?admin=${admin}
-                    ?showDate=${byOrigin}
-                    ?selectable=${this._selecting}
-                    ?selected=${this._selected.has(item.record.id)}
-                  ></notification-journal-record>`,
+              : "waiting" in item
+                ? html`<p class="waiting">${localize("loading")}</p>`
+                : "group" in item
+                  ? this._groupHeader(localize, item.group, item.record, originIcons)
+                  : html`<notification-journal-record
+                      .record=${item.record}
+                      .localize=${localize}
+                      .clock=${clock}
+                      .userNames=${userNames}
+                      .originIcons=${originIcons}
+                      .sign=${this._sign}
+                      ?admin=${admin}
+                      ?showDate=${byOrigin}
+                      ?selectable=${this._selecting}
+                      ?selected=${this._selected.has(item.record.id)}
+                    ></notification-journal-record>`,
         )}
       </div>
       ${
-        this._records.length < this._total
+        !this._days && this._records.length < this._total
           ? html`<div class="sentinel ${collapsed ? "" : "auto"}">
               <button class="text-button" ?disabled=${this._loading} @click=${() => this._load(true)}>
                 ${localize(this._loading ? "loading" : "load_more")}
@@ -1231,6 +1361,15 @@ export class NotificationJournalPanel extends LitElement {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    .day .group-count {
+      letter-spacing: normal;
+      font-weight: 400;
+    }
+    .waiting {
+      margin: 8px 0;
+      color: var(--secondary-text-color);
+      font-size: 0.875rem;
     }
     .group-count {
       min-width: 22px;
