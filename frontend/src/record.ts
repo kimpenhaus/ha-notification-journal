@@ -18,6 +18,7 @@ import {
   mdiChevronDown,
   mdiCheckboxBlankCircleOutline,
   mdiCheckCircle,
+  mdiClose,
   mdiHelpCircleOutline,
   mdiHomeAssistant,
   mdiImageOffOutline,
@@ -36,7 +37,7 @@ import {
 import { countText, type Localize } from "./localize";
 import { followInternal, inline } from "./markdown";
 import { appData, fileName, loadable, type Media, notificationMedia, notificationTag, type Signer } from "./media";
-import { surface } from "./styles";
+import { controlStyles, surface } from "./styles";
 import type { Answer, NotificationRecord, Origin, OriginKind, Recipient, Status } from "./types";
 
 const BELL = "persistent_notification";
@@ -152,6 +153,7 @@ export class NotificationJournalRecord extends LitElement {
     _details: { state: true },
     _calls: { state: true },
     _playing: { state: true },
+    _viewing: { state: true },
     _failed: { state: true },
     _sources: { state: true },
     sign: { attribute: false },
@@ -169,6 +171,8 @@ export class NotificationJournalRecord extends LitElement {
   declare _details: boolean;
   declare _calls: boolean;
   declare _playing: boolean;
+  declare _viewing: boolean;
+  private _pressedOutside = false;
   declare _failed: ReadonlySet<string>;
   declare _sources: ReadonlyMap<string, string>;
   declare sign: Signer | undefined;
@@ -186,6 +190,7 @@ export class NotificationJournalRecord extends LitElement {
     this._details = false;
     this._calls = false;
     this._playing = false;
+    this._viewing = false;
     this._failed = new Set();
     this._sources = new Map();
     this.selectable = false;
@@ -255,6 +260,7 @@ export class NotificationJournalRecord extends LitElement {
           </button>
         </div>
       </article>
+      ${this._viewing ? this._viewer() : nothing}
     `;
   }
 
@@ -295,11 +301,11 @@ export class NotificationJournalRecord extends LitElement {
     });
   }
 
-  private _observeFrame(video: Element | undefined): void {
+  private readonly _observeFrame = (video: Element | undefined): void => {
     if (this._frame) frames.unobserve(this._frame);
     this._frame = video;
     if (video) frames.observe(video);
-  }
+  };
 
   private _usable(address: string | undefined): string | undefined {
     return address && !this._failed.has(address) ? address : undefined;
@@ -349,9 +355,64 @@ export class NotificationJournalRecord extends LitElement {
       target="_blank"
       rel="noopener noreferrer"
       title=${this.localize("open_image")}
+      @click=${(event: MouseEvent) => {
+        if (event.defaultPrevented || event.button !== 0) return;
+        if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        this._viewing = true;
+      }}
       ><img src=${source} alt="" loading="lazy" @error=${() => this._fail(address)}
     /></a>`;
   }
+
+  /** The image in full size above the panel; closes with Esc, a click on the backdrop or the close button. */
+  private _viewer(): TemplateResult | typeof nothing {
+    const address = this._found.image;
+    const source = address && this._sources.get(address);
+    if (!address || !source) return nothing;
+    const localize = this.localize;
+    const outside = (event: MouseEvent) => {
+      const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+      return (
+        event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom
+      );
+    };
+    return html`<dialog
+      class="viewer"
+      ${ref(this._showViewer)}
+      @close=${() => (this._viewing = false)}
+      @pointerdown=${(event: PointerEvent) => (this._pressedOutside = outside(event))}
+      @click=${(event: MouseEvent) => {
+        if (this._pressedOutside && outside(event)) (event.currentTarget as HTMLDialogElement).close();
+      }}
+    >
+      <header>
+        <span class="viewer-title">${this.record.title || fileName(address)}</span>
+        <a
+          class="icon-button"
+          href=${source}
+          target="_blank"
+          rel="noopener noreferrer"
+          title=${localize("open_in_new_tab")}
+          >${icon(mdiOpenInNew, localize("open_in_new_tab"))}</a
+        >
+        <button class="icon-button" title=${localize("close")} autofocus @click=${() => (this._viewing = false)}>
+          ${icon(mdiClose, localize("close"))}
+        </button>
+      </header>
+      <img src=${source} alt=${fileName(address)} />
+    </dialog>`;
+  }
+
+  private readonly _showViewer = (element: Element | undefined): void => {
+    if (!(element instanceof HTMLDialogElement)) {
+      this._viewing = false;
+      return;
+    }
+    void this.updateComplete.then(() => {
+      if (element.isConnected && !element.open) element.showModal();
+    });
+  };
 
   private _video(address: string, poster: string | undefined): TemplateResult | typeof nothing {
     const source = this._sources.get(address);
@@ -385,7 +446,7 @@ export class NotificationJournalRecord extends LitElement {
               preload="metadata"
               muted
               playsinline
-              ${ref((element) => this._observeFrame(element))}
+              ${ref(this._observeFrame)}
               @error=${() => this._fail(address)}
             ></video>`
       }
@@ -623,530 +684,569 @@ export class NotificationJournalRecord extends LitElement {
     </section>`;
   }
 
-  static override styles = css`
-    :host {
-      display: block;
-    }
-    .card {
-      --status-color: var(--info-color);
-      display: flex;
-      gap: 14px;
-      padding: 14px 16px 6px;
-      ${surface}
-      border-left: 4px solid var(--status-color);
-    }
-    .card.delivered,
-    .card.answered {
-      --status-color: var(--success-color);
-    }
-    .card.failed {
-      --status-color: var(--error-color);
-    }
-    .card.dismissed,
-    .card.replaced {
-      --status-color: var(--secondary-text-color);
-    }
-    .message a {
-      color: var(--primary-color);
-    }
-    .message code {
-      font-family: var(--ha-font-family-code);
-      font-size: 0.9em;
-      padding: 0 4px;
-      border-radius: 4px;
-      background: var(--secondary-background-color);
-    }
-    .status-note {
-      margin: 6px 0 0;
-      font-size: 0.85rem;
-      color: var(--secondary-text-color);
-    }
-    .side {
-      flex: none;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding-bottom: 8px;
-    }
-    .card.selectable {
-      cursor: pointer;
-      user-select: none;
-    }
-    .card.selected {
-      border-color: var(--primary-color);
-      background: color-mix(in srgb, var(--primary-color) 8%, var(--card-background-color));
-    }
-    .check {
-      display: grid;
-      place-items: center;
-      width: 36px;
-      height: 36px;
-      color: var(--secondary-text-color);
-    }
-    .card.selected .check {
-      color: var(--primary-color);
-    }
-    .check .icon {
-      width: 26px;
-      height: 26px;
-    }
-    .status {
-      flex: none;
-      display: grid;
-      place-items: center;
-      width: 36px;
-      height: 36px;
-      border-radius: 50%;
-      color: var(--status-color);
-      background: color-mix(in srgb, var(--status-color) 14%, transparent);
-    }
-    .icon {
-      width: 18px;
-      height: 18px;
-      fill: currentColor;
-      flex: none;
-    }
-    .status .icon {
-      width: 20px;
-      height: 20px;
-    }
-    .body {
-      flex: 1;
-      min-width: 0;
-    }
-    header {
-      display: flex;
-      align-items: baseline;
-      gap: 8px;
-    }
-    h3 {
-      flex: 1;
-      margin: 0;
-      font-size: 1.12rem;
-      font-weight: 500;
-      line-height: 1.35;
-      color: var(--primary-text-color);
-      overflow-wrap: anywhere;
-    }
-    time {
-      flex: none;
-      font-size: 0.85rem;
-      color: var(--secondary-text-color);
-      font-variant-numeric: tabular-nums;
-    }
-    .badge {
-      flex: none;
-      font-size: 0.72rem;
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      padding: 2px 8px;
-      border-radius: 10px;
-      color: var(--status-color);
-      background: color-mix(in srgb, var(--status-color) 14%, transparent);
-    }
-    .message {
-      margin: 8px 0 0;
-      color: var(--primary-text-color);
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      line-height: 1.45;
-    }
-    .message.clamp {
-      display: -webkit-box;
-      -webkit-line-clamp: 4;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-    .error {
-      display: flex;
-      gap: 6px;
-      align-items: flex-start;
-      margin: 8px 0 0;
-      padding: 8px 10px;
-      border-radius: 8px;
-      color: var(--error-color);
-      background: color-mix(in srgb, var(--error-color) 10%, transparent);
-      overflow-wrap: anywhere;
-    }
-    .indent {
-      padding-left: 14px;
-    }
-    .actions {
-      display: grid;
-      gap: 8px;
-      margin-top: 12px;
-    }
-    .buttons {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-    .button {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 10px;
-      border-radius: 8px;
-      border: 1px solid var(--divider-color);
-      color: var(--secondary-text-color);
-      font-size: 0.85rem;
-      overflow-wrap: anywhere;
-    }
-    .button.chosen {
-      --answer-color: var(--success-color);
-      border-color: var(--answer-color);
-      color: var(--answer-color);
-      background: color-mix(in srgb, var(--answer-color) 12%, transparent);
-      font-weight: 500;
-    }
-    .button.chosen .icon {
-      width: 16px;
-      height: 16px;
-    }
-    .by {
-      font-weight: 400;
-      font-size: 0.8rem;
-      color: var(--secondary-text-color);
-    }
-    .reply {
-      display: flex;
-      gap: 8px;
-      align-items: flex-start;
-      padding: 8px 10px;
-      border-radius: 10px;
-      background: var(--secondary-background-color);
-    }
-    .reply p {
-      margin: 0;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-    }
-    .reply .by {
-      display: block;
-      margin-top: 2px;
-    }
-    .answers {
-      display: grid;
-      gap: 6px;
-      margin: 0;
-      padding: 0;
-      list-style: none;
-      font-size: 0.85rem;
-    }
-    .answers li {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .answers b {
-      font-weight: 500;
-    }
-    .chips {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-top: 16px;
-    }
-    .chips.recipients {
-      margin-top: 8px;
-    }
-    .chip.tag {
-      color: var(--secondary-text-color);
-    }
-    .media {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 6px;
-      margin-top: 12px;
-    }
-    .preview,
-    .player {
-      display: block;
-      position: relative;
-      max-width: min(100%, 420px);
-      box-sizing: border-box;
-      padding: 0;
-      overflow: hidden;
-      ${surface}
-      background: var(--secondary-background-color);
-      font: inherit;
-      cursor: zoom-in;
-    }
-    .preview img {
-      display: block;
-      max-width: 100%;
-      max-height: 220px;
-    }
-    .preview.video,
-    .player {
-      width: min(100%, 392px);
-      cursor: pointer;
-    }
-    .preview.video img,
-    .preview.video video {
-      width: 100%;
-      aspect-ratio: 16 / 9;
-      max-height: 220px;
-      object-fit: contain;
-    }
-    .player {
-      max-height: 320px;
-      cursor: auto;
-    }
-    .play {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      display: grid;
-      place-items: center;
-      width: 52px;
-      height: 52px;
-      margin: -26px 0 0 -26px;
-      border-radius: 50%;
-      color: var(--text-primary-color);
-      background: color-mix(in srgb, var(--primary-color) 85%, transparent);
-    }
-    .play .icon {
-      width: 30px;
-      height: 30px;
-    }
-    .caption {
-      position: absolute;
-      right: 0;
-      bottom: 0;
-      left: 0;
-      padding: 4px 10px;
-      overflow: hidden;
-      font-size: 0.8rem;
-      text-align: left;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      color: var(--primary-text-color);
-      background: color-mix(in srgb, var(--card-background-color) 75%, transparent);
-    }
-    .chip.media-link {
-      border-radius: 6px;
-      color: var(--primary-color);
-    }
-    .media-name {
-      color: var(--secondary-text-color);
-    }
-    .chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      min-height: 28px;
-      box-sizing: border-box;
-      padding: 2px 10px;
-      border-radius: 14px;
-      border: 1px solid var(--divider-color);
-      background: none;
-      color: var(--primary-text-color);
-      font: inherit;
-      font-size: 0.85rem;
-      text-decoration: none;
-      max-width: 100%;
-      overflow-wrap: anywhere;
-    }
-    .chip .icon,
-    .chip ha-icon {
-      color: var(--secondary-text-color);
-    }
-    ha-icon {
-      --mdc-icon-size: 18px;
-      display: inline-flex;
-      flex: none;
-    }
-    .chip.origin {
-      background: color-mix(in srgb, var(--primary-color) 8%, transparent);
-      border-color: transparent;
-    }
-    a.chip.link:hover,
-    button.chip:hover {
-      border-color: var(--primary-color);
-    }
-    a.chip.link .icon:last-child {
-      width: 14px;
-      height: 14px;
-      color: var(--primary-color);
-    }
-    button.chip {
-      cursor: pointer;
-    }
-    button.chip .icon:last-child {
-      transition: transform 0.15s;
-    }
-    button.chip.open .icon:last-child {
-      transform: rotate(180deg);
-    }
-    .count {
-      min-width: 18px;
-      padding: 0 5px;
-      box-sizing: border-box;
-      border-radius: 9px;
-      font-size: 0.75rem;
-      text-align: center;
-      color: var(--text-primary-color);
-      background: var(--primary-color);
-    }
-    .recipient {
-      padding-left: 2px;
-      border-color: transparent;
-      background: var(--secondary-background-color);
-    }
-    .avatar {
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
-      object-fit: cover;
-      flex: none;
-    }
-    .avatar.initials {
-      display: grid;
-      place-items: center;
-      font-size: 0.7rem;
-      font-weight: 600;
-      color: var(--text-light-primary-color);
-      background: var(--light-primary-color);
-    }
-    .avatar.device {
-      display: grid;
-      place-items: center;
-      background: var(--card-background-color);
-    }
-    .avatar.device .icon {
-      width: 15px;
-      height: 15px;
-    }
-    .muted {
-      color: var(--secondary-text-color);
-      font-size: 0.85rem;
-    }
-    .chip.muted {
-      color: var(--secondary-text-color);
-    }
-    section {
-      margin-top: 12px;
-      padding: 10px 12px;
-      border-radius: 8px;
-      background: var(--secondary-background-color);
-    }
-    h4 {
-      margin: 0 0 6px;
-      font-size: 0.78rem;
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: var(--secondary-text-color);
-    }
-    ul {
-      margin: 0;
-      padding: 0;
-      list-style: none;
-    }
-    li {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 4px 10px;
-      padding: 6px 0;
-    }
-    li + li {
-      border-top: 1px solid var(--divider-color);
-    }
-    li .chips {
-      margin: 0;
-    }
-    li .recipient {
-      background: var(--card-background-color);
-    }
-    .call-channel {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 0.85rem;
-      color: var(--secondary-text-color);
-      overflow-wrap: anywhere;
-    }
-    dl {
-      display: grid;
-      grid-template-columns: max-content 1fr;
-      gap: 4px 16px;
-      margin: 0;
-      font-size: 0.85rem;
-    }
-    dt {
-      color: var(--secondary-text-color);
-    }
-    dd {
-      margin: 0;
-      overflow-wrap: anywhere;
-      color: var(--primary-text-color);
-    }
-    code,
-    pre {
-      font-family: var(--ha-font-family-code);
-      font-size: 0.8rem;
-    }
-    .details h4 {
-      margin-top: 12px;
-    }
-    pre {
-      margin: 0;
-      padding: 8px 10px;
-      border-radius: 6px;
-      overflow-x: auto;
-      color: var(--primary-text-color);
-      background: var(--card-background-color);
-    }
-    .more {
-      display: flex;
-      align-items: center;
-      gap: 2px;
-      margin: 6px 0 0 auto;
-      padding: 4px 6px;
-      border: none;
-      border-radius: 6px;
-      background: none;
-      color: var(--secondary-text-color);
-      font: inherit;
-      font-size: 0.8rem;
-      cursor: pointer;
-    }
-    .more:hover {
-      color: var(--primary-color);
-    }
-    .more .icon {
-      transition: transform 0.15s;
-    }
-    .more.open .icon {
-      transform: rotate(180deg);
-    }
-    button:focus-visible,
-    a:focus-visible {
-      outline: 2px solid var(--primary-color);
-      outline-offset: 2px;
-    }
-    @media (max-width: 600px) {
-      .card {
-        gap: 10px;
-        padding: 12px 12px 4px;
+  static override styles = [
+    controlStyles,
+    css`
+      :host {
+        display: block;
       }
-      .status,
+      .card {
+        --status-color: var(--info-color);
+        display: flex;
+        gap: 14px;
+        padding: 14px 16px 6px;
+        ${surface}
+        border-left: 4px solid var(--status-color);
+      }
+      .card.delivered,
+      .card.answered {
+        --status-color: var(--success-color);
+      }
+      .card.failed {
+        --status-color: var(--error-color);
+      }
+      .card.dismissed,
+      .card.replaced {
+        --status-color: var(--secondary-text-color);
+      }
+      .message a {
+        color: var(--primary-color);
+      }
+      .message code {
+        font-family: var(--ha-font-family-code);
+        font-size: 0.9em;
+        padding: 0 4px;
+        border-radius: 4px;
+        background: var(--secondary-background-color);
+      }
+      .status-note {
+        margin: 6px 0 0;
+        font-size: 0.85rem;
+        color: var(--secondary-text-color);
+      }
+      .side {
+        flex: none;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding-bottom: 8px;
+      }
+      .card.selectable {
+        cursor: pointer;
+        user-select: none;
+      }
+      .card.selected {
+        border-color: var(--primary-color);
+        background: color-mix(in srgb, var(--primary-color) 8%, var(--card-background-color));
+      }
       .check {
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        color: var(--secondary-text-color);
+      }
+      .card.selected .check {
+        color: var(--primary-color);
+      }
+      .check .icon {
+        width: 26px;
+        height: 26px;
+      }
+      .status {
+        flex: none;
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        color: var(--status-color);
+        background: color-mix(in srgb, var(--status-color) 14%, transparent);
+      }
+      .icon {
+        width: 18px;
+        height: 18px;
+        fill: currentColor;
+        flex: none;
+      }
+      .status .icon {
+        width: 20px;
+        height: 20px;
+      }
+      .body {
+        flex: 1;
+        min-width: 0;
+      }
+      header {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+      }
+      h3 {
+        flex: 1;
+        margin: 0;
+        font-size: 1.12rem;
+        font-weight: 500;
+        line-height: 1.35;
+        color: var(--primary-text-color);
+        overflow-wrap: anywhere;
+      }
+      time {
+        flex: none;
+        font-size: 0.85rem;
+        color: var(--secondary-text-color);
+        font-variant-numeric: tabular-nums;
+      }
+      .badge {
+        flex: none;
+        font-size: 0.72rem;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding: 2px 8px;
+        border-radius: 10px;
+        color: var(--status-color);
+        background: color-mix(in srgb, var(--status-color) 14%, transparent);
+      }
+      .message {
+        margin: 8px 0 0;
+        color: var(--primary-text-color);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        line-height: 1.45;
+      }
+      .message.clamp {
+        display: -webkit-box;
+        -webkit-line-clamp: 4;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .error {
+        display: flex;
+        gap: 6px;
+        align-items: flex-start;
+        margin: 8px 0 0;
+        padding: 8px 10px;
+        border-radius: 8px;
+        color: var(--error-color);
+        background: color-mix(in srgb, var(--error-color) 10%, transparent);
+        overflow-wrap: anywhere;
+      }
+      .indent {
+        padding-left: 14px;
+      }
+      .actions {
+        display: grid;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--divider-color);
+        color: var(--secondary-text-color);
+        font-size: 0.85rem;
+        overflow-wrap: anywhere;
+      }
+      .button.chosen {
+        --answer-color: var(--success-color);
+        border-color: var(--answer-color);
+        color: var(--answer-color);
+        background: color-mix(in srgb, var(--answer-color) 12%, transparent);
+        font-weight: 500;
+      }
+      .button.chosen .icon {
+        width: 16px;
+        height: 16px;
+      }
+      .by {
+        font-weight: 400;
+        font-size: 0.8rem;
+        color: var(--secondary-text-color);
+      }
+      .reply {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        padding: 8px 10px;
+        border-radius: 10px;
+        background: var(--secondary-background-color);
+      }
+      .reply p {
+        margin: 0;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .reply .by {
+        display: block;
+        margin-top: 2px;
+      }
+      .answers {
+        display: grid;
+        gap: 6px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        font-size: 0.85rem;
+      }
+      .answers li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .answers b {
+        font-weight: 500;
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 16px;
+      }
+      .chips.recipients {
+        margin-top: 8px;
+      }
+      .chip.tag {
+        color: var(--secondary-text-color);
+      }
+      .media {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+        margin-top: 12px;
+      }
+      .preview,
+      .player {
+        display: block;
+        position: relative;
+        max-width: min(100%, 420px);
+        box-sizing: border-box;
+        padding: 0;
+        overflow: hidden;
+        ${surface}
+        background: var(--secondary-background-color);
+        font: inherit;
+        cursor: zoom-in;
+      }
+      .viewer {
+        max-width: min(96vw, 1400px);
+        max-height: 94vh;
+        padding: 0;
+        overflow: hidden;
+        ${surface}
+        color: var(--primary-text-color);
+      }
+      .viewer::backdrop {
+        backdrop-filter: var(--ha-dialog-scrim-backdrop-filter, var(--dialog-backdrop-filter, none));
+        background-color: var(--mdc-dialog-scrim-color, none);
+      }
+      .viewer header {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 4px 4px 16px;
+      }
+      .viewer-title {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 500;
+      }
+      .viewer .icon-button {
+        color: var(--secondary-text-color);
+      }
+      .viewer img {
+        display: block;
+        max-width: min(96vw, 1400px);
+        max-height: calc(94vh - 48px);
+        margin: 0 auto;
+        object-fit: contain;
+      }
+      .preview img {
+        display: block;
+        max-width: 100%;
+        max-height: 220px;
+      }
+      .preview.video,
+      .player {
+        width: min(100%, 392px);
+        cursor: pointer;
+      }
+      .preview.video img,
+      .preview.video video {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        max-height: 220px;
+        object-fit: contain;
+      }
+      .player {
+        max-height: 320px;
+        cursor: auto;
+      }
+      .play {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        display: grid;
+        place-items: center;
+        width: 52px;
+        height: 52px;
+        margin: -26px 0 0 -26px;
+        border-radius: 50%;
+        color: var(--text-primary-color);
+        background: color-mix(in srgb, var(--primary-color) 85%, transparent);
+      }
+      .play .icon {
         width: 30px;
         height: 30px;
       }
-      .indent {
-        padding-left: 8px;
+      .caption {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        padding: 4px 10px;
+        overflow: hidden;
+        font-size: 0.8rem;
+        text-align: left;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--primary-text-color);
+        background: color-mix(in srgb, var(--card-background-color) 75%, transparent);
       }
-    }
-  `;
+      .chip.media-link {
+        border-radius: 6px;
+        color: var(--primary-color);
+      }
+      .media-name {
+        color: var(--secondary-text-color);
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        box-sizing: border-box;
+        padding: 2px 10px;
+        border-radius: 14px;
+        border: 1px solid var(--divider-color);
+        background: none;
+        color: var(--primary-text-color);
+        font: inherit;
+        font-size: 0.85rem;
+        text-decoration: none;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+      }
+      .chip .icon,
+      .chip ha-icon {
+        color: var(--secondary-text-color);
+      }
+      ha-icon {
+        --mdc-icon-size: 18px;
+        display: inline-flex;
+        flex: none;
+      }
+      .chip.origin {
+        background: color-mix(in srgb, var(--primary-color) 8%, transparent);
+        border-color: transparent;
+      }
+      a.chip.link:hover,
+      button.chip:hover {
+        border-color: var(--primary-color);
+      }
+      a.chip.link .icon:last-child {
+        width: 14px;
+        height: 14px;
+        color: var(--primary-color);
+      }
+      button.chip {
+        cursor: pointer;
+      }
+      button.chip .icon:last-child {
+        transition: transform 0.15s;
+      }
+      button.chip.open .icon:last-child {
+        transform: rotate(180deg);
+      }
+      .count {
+        min-width: 18px;
+        padding: 0 5px;
+        box-sizing: border-box;
+        border-radius: 9px;
+        font-size: 0.75rem;
+        text-align: center;
+        color: var(--text-primary-color);
+        background: var(--primary-color);
+      }
+      .recipient {
+        padding-left: 2px;
+        border-color: transparent;
+        background: var(--secondary-background-color);
+      }
+      .avatar {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        object-fit: cover;
+        flex: none;
+      }
+      .avatar.initials {
+        display: grid;
+        place-items: center;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: var(--text-light-primary-color);
+        background: var(--light-primary-color);
+      }
+      .avatar.device {
+        display: grid;
+        place-items: center;
+        background: var(--card-background-color);
+      }
+      .avatar.device .icon {
+        width: 15px;
+        height: 15px;
+      }
+      .muted {
+        color: var(--secondary-text-color);
+        font-size: 0.85rem;
+      }
+      .chip.muted {
+        color: var(--secondary-text-color);
+      }
+      section {
+        margin-top: 12px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: var(--secondary-background-color);
+      }
+      h4 {
+        margin: 0 0 6px;
+        font-size: 0.78rem;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--secondary-text-color);
+      }
+      ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      li {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 10px;
+        padding: 6px 0;
+      }
+      li + li {
+        border-top: 1px solid var(--divider-color);
+      }
+      li .chips {
+        margin: 0;
+      }
+      li .recipient {
+        background: var(--card-background-color);
+      }
+      .call-channel {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.85rem;
+        color: var(--secondary-text-color);
+        overflow-wrap: anywhere;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 4px 16px;
+        margin: 0;
+        font-size: 0.85rem;
+      }
+      dt {
+        color: var(--secondary-text-color);
+      }
+      dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+        color: var(--primary-text-color);
+      }
+      code,
+      pre {
+        font-family: var(--ha-font-family-code);
+        font-size: 0.8rem;
+      }
+      .details h4 {
+        margin-top: 12px;
+      }
+      pre {
+        margin: 0;
+        padding: 8px 10px;
+        border-radius: 6px;
+        overflow-x: auto;
+        color: var(--primary-text-color);
+        background: var(--card-background-color);
+      }
+      .more {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        margin: 6px 0 0 auto;
+        padding: 4px 6px;
+        border: none;
+        border-radius: 6px;
+        background: none;
+        color: var(--secondary-text-color);
+        font: inherit;
+        font-size: 0.8rem;
+        cursor: pointer;
+      }
+      .more:hover {
+        color: var(--primary-color);
+      }
+      .more .icon {
+        transition: transform 0.15s;
+      }
+      .more.open .icon {
+        transform: rotate(180deg);
+      }
+      button:focus-visible,
+      a:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+      }
+      @media (max-width: 600px) {
+        .card {
+          gap: 10px;
+          padding: 12px 12px 4px;
+        }
+        .status,
+        .check {
+          width: 30px;
+          height: 30px;
+        }
+        .indent {
+          padding-left: 8px;
+        }
+      }
+    `,
+  ];
 }
 
 if (!customElements.get("notification-journal-record")) {
