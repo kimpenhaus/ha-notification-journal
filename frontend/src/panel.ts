@@ -105,7 +105,7 @@ export class NotificationJournalPanel extends LitElement {
     _pending: { state: true },
     _view: { state: true },
     _groups: { state: true },
-    _collapsed: { state: true },
+    _folded: { state: true },
     _notice: { state: true },
     _archived: { state: true },
     _selecting: { state: true },
@@ -125,7 +125,13 @@ export class NotificationJournalPanel extends LitElement {
   declare _pending: number;
   declare _view: View;
   declare _groups: Record<string, number>;
-  declare _collapsed: Set<string>;
+  /** Sections opened or closed by hand; the others follow `_folding`. */
+  declare _folded: Map<string, boolean>;
+  /** Whether sections start collapsed, all but `_newest`. */
+  private _folding = false;
+  private _newest: string | undefined;
+  /** Whether the next list loaded starts folded anew. */
+  private _refold = true;
   declare _notice: string | undefined;
   declare _archived: boolean;
   declare _selecting: boolean;
@@ -157,7 +163,7 @@ export class NotificationJournalPanel extends LitElement {
     this._filters = { ...DEFAULT_FILTERS, newestFirst: stored(ORDER_KEY) !== "false" };
     this._view = stored(VIEW_KEY) === "origin" ? "origin" : "time";
     this._groups = {};
-    this._collapsed = new Set();
+    this._folded = new Map();
     this._archived = false;
     this._selecting = false;
     this._selected = new Set();
@@ -282,6 +288,8 @@ export class NotificationJournalPanel extends LitElement {
         this._records = page.records;
         this._pending = 0;
       }
+      if (this._refold && !more) this._fold();
+      else this._newest = this._newestDay();
       if (page.total !== undefined) this._total = page.total;
       if (page.groups !== undefined || !more) this._groups = page.groups ?? {};
       this._error = undefined;
@@ -321,6 +329,10 @@ export class NotificationJournalPanel extends LitElement {
     }
     const { change, record } = event;
     const index = this._records.findIndex((known) => known.id === record.id);
+    const day = `day-${dayKey(this._clock, record.time)}`;
+    if (index < 0 && this._folding && !this._sections().includes(day)) {
+      this._folded = new Map(this._folded).set(day, false);
+    }
     if (index >= 0) {
       this._records = this._records.map((known, position) => (position === index ? record : known));
     } else if (change === "added" && !this._archived) {
@@ -413,15 +425,38 @@ export class NotificationJournalPanel extends LitElement {
     if (archived === this._archived) return;
     this._archived = archived;
     this._endSelection();
-    this._collapsed = new Set();
     this.renderRoot.querySelector(".content")?.scrollTo({ top: 0 });
+    this._refold = true;
     void this._load();
   }
 
   private _toggle(section: string): void {
-    const collapsed = new Set(this._collapsed);
-    if (!collapsed.delete(section)) collapsed.add(section);
-    this._collapsed = collapsed;
+    this._folded = new Map(this._folded).set(section, !this._isCollapsed(section));
+  }
+
+  private _isCollapsed(section: string): boolean {
+    return this._folded.get(section) ?? (this._folding && section !== this._newest);
+  }
+
+  /** The timeline without filters opens with only the newest day expanded; with a filter or by origin all are open. */
+  private _fold(): void {
+    this._refold = false;
+    this._folding = this._view === "time" && this._unfiltered;
+    this._newest = this._newestDay();
+    this._folded = new Map();
+  }
+
+  private _foldEvery(collapsed: boolean): void {
+    this._folding = collapsed;
+    this._newest = undefined;
+    this._folded = new Map();
+  }
+
+  private _newestDay(): string | undefined {
+    let newest: NotificationRecord | undefined;
+    for (const record of this._records)
+      if (!newest || Date.parse(record.time) > Date.parse(newest.time)) newest = record;
+    return newest && `day-${dayKey(this._clock, newest.time)}`;
   }
 
   private _sections(): string[] {
@@ -444,8 +479,13 @@ export class NotificationJournalPanel extends LitElement {
     if ("newestFirst" in changes) store(ORDER_KEY, String(this._filters.newestFirst));
     this.renderRoot.querySelector(".content")?.scrollTo({ top: 0 });
     const reorderOnly = Object.keys(changes).every((key) => key === "newestFirst");
-    if (reorderOnly && this._complete && !this._loading) this._arrange();
-    else void this._load();
+    if (reorderOnly && this._complete && !this._loading) {
+      this._arrange();
+      this._fold();
+    } else {
+      this._refold = true;
+      void this._load();
+    }
   }
 
   private _searchInput(event: InputEvent): void {
@@ -470,12 +510,16 @@ export class NotificationJournalPanel extends LitElement {
     if (view === this._view) return;
     this._view = view;
     store(VIEW_KEY, view);
-    this._collapsed = new Set();
     this._selecting = false;
     this._selected = new Set();
     this.renderRoot.querySelector(".content")?.scrollTo({ top: 0 });
-    if (this._complete && !this._loading) this._arrange();
-    else void this._load();
+    if (this._complete && !this._loading) {
+      this._arrange();
+      this._fold();
+    } else {
+      this._refold = true;
+      void this._load();
+    }
   }
 
   private _lookups(): { userNames: Map<string, string>; originIcons: Map<string, string> } {
@@ -798,8 +842,8 @@ export class NotificationJournalPanel extends LitElement {
   private _foldAll(localize: Localize): TemplateResult | typeof nothing {
     const sections = this._sections();
     if (sections.length < 2) return nothing;
-    const expand = sections.every((section) => this._collapsed.has(section));
-    return html`<button class="text-button" @click=${() => (this._collapsed = expand ? new Set() : new Set(sections))}>
+    const expand = sections.every((section) => this._isCollapsed(section));
+    return html`<button class="text-button" @click=${() => this._foldEvery(!expand)}>
       ${icon(expand ? mdiUnfoldMoreHorizontal : mdiUnfoldLessHorizontal)}${localize(expand ? "expand_all" : "collapse_all")}
     </button>`;
   }
@@ -837,7 +881,7 @@ export class NotificationJournalPanel extends LitElement {
         items.push(byOrigin ? { group: key, record } : { day: key });
         section = key;
       }
-      if (!this._collapsed.has(byOrigin ? `group-${key}` : `day-${key}`)) items.push({ record });
+      if (!this._isCollapsed(byOrigin ? `group-${key}` : `day-${key}`)) items.push({ record });
     }
     return html`
       ${
@@ -858,8 +902,8 @@ export class NotificationJournalPanel extends LitElement {
           (item) =>
             "day" in item
               ? html`<button
-                  class="section day ${this._collapsed.has(`day-${item.day}`) ? "collapsed" : ""}"
-                  aria-expanded=${this._collapsed.has(`day-${item.day}`) ? "false" : "true"}
+                  class="section day ${this._isCollapsed(`day-${item.day}`) ? "collapsed" : ""}"
+                  aria-expanded=${this._isCollapsed(`day-${item.day}`) ? "false" : "true"}
                   @click=${() => this._toggle(`day-${item.day}`)}
                 >
                   ${icon(mdiChevronDown)}<span>${dayLabel(clock, localize, item.day)}</span>
@@ -902,7 +946,7 @@ export class NotificationJournalPanel extends LitElement {
     const name = originName(localize, key, origin.name);
     const glyph = originGlyph(origin, originIcons);
     const section = `group-${key}`;
-    const collapsed = this._collapsed.has(section);
+    const collapsed = this._isCollapsed(section);
     return html`<button
       class="section group ${collapsed ? "collapsed" : ""}"
       aria-expanded=${collapsed ? "false" : "true"}
