@@ -29,6 +29,7 @@ import {
   mdiUnfoldMoreHorizontal,
 } from "./icons";
 import { countText, type Localize, localizer } from "./localize";
+import { type Signer, signPath } from "./media";
 import { originGlyph, originName } from "./record";
 import type { NotificationJournalStatistics } from "./statistics";
 import "./statistics";
@@ -165,6 +166,8 @@ export class NotificationJournalPanel extends LitElement {
     this._loading = false;
     this._pending = 0;
   }
+
+  private readonly _sign: Signer = (path) => signPath(this._hass!.connection, path);
 
   get hass(): HomeAssistant | undefined {
     return this._hass;
@@ -353,7 +356,7 @@ export class NotificationJournalPanel extends LitElement {
     this._archived = false;
     this._search = "";
     window.clearTimeout(this._searchTimer);
-    this._set({ text: "", status: "", origin: origin?.key ?? "", period: range });
+    this._set({ text: "", status: "", origin: origin?.key ?? "", tag: "", period: range });
   }
 
   private _removed(recordId: string): void {
@@ -867,6 +870,7 @@ export class NotificationJournalPanel extends LitElement {
                     .clock=${clock}
                     .userNames=${userNames}
                     .originIcons=${originIcons}
+                    .sign=${this._sign}
                     ?admin=${admin}
                     ?showDate=${byOrigin}
                     ?selectable=${this._selecting}

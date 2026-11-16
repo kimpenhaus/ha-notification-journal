@@ -34,7 +34,7 @@ import {
 } from "./icons";
 import { countText, type Localize } from "./localize";
 import { followInternal, inline } from "./markdown";
-import { appData, fileName, notificationMedia, notificationTag } from "./media";
+import { appData, fileName, loadable, type Media, notificationMedia, notificationTag, type Signer } from "./media";
 import { surface } from "./styles";
 import type { Answer, NotificationRecord, Origin, OriginKind, Recipient, Status } from "./types";
 
@@ -155,6 +155,8 @@ export class NotificationJournalRecord extends LitElement {
     _calls: { state: true },
     _playing: { state: true },
     _failed: { state: true },
+    _sources: { state: true },
+    sign: { attribute: false },
     selectable: { type: Boolean },
     selected: { type: Boolean },
   };
@@ -170,6 +172,9 @@ export class NotificationJournalRecord extends LitElement {
   declare _calls: boolean;
   declare _playing: boolean;
   declare _failed: ReadonlySet<string>;
+  declare _sources: ReadonlyMap<string, string>;
+  declare sign: Signer | undefined;
+  private _found: Media = {};
   declare selectable: boolean;
   declare selected: boolean;
 
@@ -183,6 +188,7 @@ export class NotificationJournalRecord extends LitElement {
     this._calls = false;
     this._playing = false;
     this._failed = new Set();
+    this._sources = new Map();
     this.selectable = false;
     this.selected = false;
   }
@@ -253,6 +259,11 @@ export class NotificationJournalRecord extends LitElement {
     `;
   }
 
+  protected override willUpdate(changed: PropertyValues): void {
+    super.willUpdate(changed);
+    if (changed.has("record") || changed.has("sign")) this._resolve();
+  }
+
   protected override updated(changed: PropertyValues): void {
     super.updated(changed);
     for (const video of this.renderRoot.querySelectorAll<HTMLVideoElement>("video.frame:not([src])")) {
@@ -269,56 +280,101 @@ export class NotificationJournalRecord extends LitElement {
     this._failed = new Set([...this._failed, address]);
   }
 
-  /** An image, or a video with its first frame or the image as preview; a link for audio and what cannot load. */
+  /** Resolves where to load the media from, signing paths on this Home Assistant. */
+  private _resolve(): void {
+    const record = this.record;
+    const media = notificationMedia(record);
+    const sources = new Map<string, string>();
+    const pending: Promise<[string, string]>[] = [];
+    for (const address of [media.image, media.video, media.audio]) {
+      if (!address) continue;
+      const source = loadable(address, this.sign);
+      if (typeof source === "string") sources.set(address, source);
+      else pending.push(source.then((path) => [address, path]));
+    }
+    this._found = media;
+    this._sources = sources;
+    if (!pending.length) return;
+    void Promise.all(pending).then((entries) => {
+      if (this.record === record) this._sources = new Map([...sources, ...entries]);
+    });
+  }
+
+  /** An image, or a video with the image or its first frame as preview; a link for audio and what cannot load. */
   private _media(): TemplateResult | typeof nothing {
-    const { image, video, audio } = notificationMedia(this.record);
+    const { image, video, audio } = this._found;
     if (!image && !video && !audio) return nothing;
     const localize = this.localize;
+    const sources = this._sources;
+    const usable = (address: string | undefined) => (address && !this._failed.has(address) ? address : undefined);
     const link = (address: string, glyph: string, label: string, unavailable = false) =>
-      html`<a class="media-link" href=${address} target="_blank" rel="noopener noreferrer"
+      html`<a class="chip media-link" href=${sources.get(address) ?? address} target="_blank" rel="noopener noreferrer"
         >${icon(glyph)}${label}<span class="media-name"
           >· ${unavailable ? `${localize("media_unavailable")} · ` : ""}${fileName(address)}</span
         ></a
       >`;
-    let visual: TemplateResult | typeof nothing = nothing;
-    if (video && this._playing) {
-      visual = html`<video class="player" src=${video} controls autoplay playsinline></video>`;
-    } else if (video) {
-      const poster = image && !this._failed.has(image) ? image : undefined;
-      visual =
-        this._failed.has(video) && !poster
-          ? link(video, mdiVideoOutline, localize("play_video"), true)
-          : html`<button class="preview video" title=${localize("play_video")} @click=${() => (this._playing = true)}>
-              ${
-                poster
-                  ? html`<img src=${poster} alt="" loading="lazy" @error=${() => this._fail(poster)} />`
-                  : html`<video
-                      class="frame"
-                      data-src="${video}#t=0.1"
-                      preload="metadata"
-                      muted
-                      playsinline
-                      @error=${() => this._fail(video)}
-                    ></video>`
-              }
-              <span class="play">${icon(mdiPlay)}</span>
-              <span class="caption">${fileName(video)}</span>
-            </button>`;
-    } else if (image) {
-      visual = this._failed.has(image)
-        ? link(image, mdiImageOffOutline, localize("open_image"), true)
-        : html`<a
+    const imagePreview = (address: string) => {
+      const source = sources.get(address);
+      return source
+        ? html`<a
             class="preview"
-            href=${image}
+            href=${source}
             target="_blank"
             rel="noopener noreferrer"
             title=${localize("open_image")}
-            ><img src=${image} alt="" loading="lazy" @error=${() => this._fail(image)}
-          /></a>`;
+            ><img src=${source} alt="" loading="lazy" @error=${() => this._fail(address)}
+          /></a>`
+        : nothing;
+    };
+    const parts: (TemplateResult | typeof nothing)[] = [];
+    const poster = usable(image);
+    if (video && usable(video)) {
+      const source = sources.get(video);
+      const posterSource = poster ? sources.get(poster) : undefined;
+      if (!source) {
+        parts.push(nothing);
+      } else if (this._playing) {
+        parts.push(
+          html`<video
+            class="player"
+            src=${source}
+            poster=${posterSource ?? nothing}
+            controls
+            autoplay
+            playsinline
+            @error=${() => {
+              this._playing = false;
+              this._fail(video);
+            }}
+          ></video>`,
+        );
+      } else {
+        parts.push(
+          html`<button class="preview video" title=${localize("play_video")} @click=${() => (this._playing = true)}>
+            ${
+              poster
+                ? html`<img src=${posterSource ?? nothing} alt="" loading="lazy" @error=${() => this._fail(poster)} />`
+                : html`<video
+                    class="frame"
+                    data-src="${source}#t=0.1"
+                    preload="metadata"
+                    muted
+                    playsinline
+                    @error=${() => this._fail(video)}
+                  ></video>`
+            }
+            <span class="play">${icon(mdiPlay)}</span>
+            <span class="caption">${fileName(video)}</span>
+          </button>`,
+        );
+      }
+    } else {
+      if (poster) parts.push(imagePreview(poster));
+      else if (image) parts.push(link(image, mdiImageOffOutline, localize("open_image"), true));
+      if (video) parts.push(link(video, mdiVideoOutline, localize("play_video"), true));
     }
-    return html`<div class="media">
-      ${visual} ${audio ? link(audio, mdiVolumeHigh, localize("play_audio")) : nothing}
-    </div>`;
+    if (audio) parts.push(link(audio, mdiVolumeHigh, localize("play_audio")));
+    return html`<div class="media">${parts}</div>`;
   }
 
   private _tag(): TemplateResult | typeof nothing {
@@ -338,7 +394,7 @@ export class NotificationJournalRecord extends LitElement {
     if (!this.selectable) return;
     const interactive = event
       .composedPath()
-      .some((target) => target instanceof HTMLElement && (target.tagName === "A" || target.tagName === "BUTTON"));
+      .some((target) => target instanceof HTMLElement && ["A", "BUTTON", "VIDEO"].includes(target.tagName));
     if (interactive) return;
     this.dispatchEvent(
       new CustomEvent("notification-select", { detail: { id: this.record.id }, bubbles: true, composed: true }),
@@ -803,7 +859,7 @@ export class NotificationJournalRecord extends LitElement {
     .player {
       display: block;
       position: relative;
-      width: min(100%, 420px);
+      max-width: min(100%, 420px);
       box-sizing: border-box;
       padding: 0;
       overflow: hidden;
@@ -813,18 +869,22 @@ export class NotificationJournalRecord extends LitElement {
       font: inherit;
       cursor: zoom-in;
     }
-    .preview img,
-    .preview video {
+    .preview img {
       display: block;
-      width: 100%;
+      max-width: 100%;
       max-height: 220px;
-      object-fit: cover;
     }
-    .preview video {
-      aspect-ratio: 16 / 9;
-    }
-    .preview.video {
+    .preview.video,
+    .player {
+      width: min(100%, 392px);
       cursor: pointer;
+    }
+    .preview.video img,
+    .preview.video video {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      max-height: 220px;
+      object-fit: contain;
     }
     .player {
       max-height: 320px;
@@ -861,20 +921,9 @@ export class NotificationJournalRecord extends LitElement {
       color: var(--primary-text-color);
       background: color-mix(in srgb, var(--card-background-color) 75%, transparent);
     }
-    .media-link {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      max-width: 100%;
-      min-height: 28px;
-      box-sizing: border-box;
-      padding: 2px 10px;
+    .chip.media-link {
       border-radius: 6px;
-      border: 1px solid var(--divider-color);
       color: var(--primary-color);
-      font-size: 0.85rem;
-      text-decoration: none;
-      overflow-wrap: anywhere;
     }
     .media-link .icon {
       width: 18px;
