@@ -12,6 +12,7 @@ from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.components.recorder.common import async_wait_recording_done
 
+from custom_components.notification_journal import IMPORT_BEFORE
 from custom_components.notification_journal.const import DATABASE_FILE, DEFAULT_OPTIONS, DOMAIN
 from custom_components.notification_journal.models import OriginKind
 from custom_components.notification_journal.store import SCHEMA_VERSION, Query
@@ -124,7 +125,7 @@ async def test_an_existing_journal_imports_nothing(recorder_mock, hass: HomeAssi
     assert await _records(entry) == []
 
 
-async def test_an_interrupted_import_goes_on_after_what_it_got_to(recorder_mock, hass: HomeAssistant) -> None:
+async def test_an_interrupted_import_starts_over(recorder_mock, hass: HomeAssistant) -> None:
     _notify(hass, "mobile_app_phone", "First", Context())
     await async_wait_recording_done(hass)
     entry = await _setup(hass)
@@ -132,13 +133,14 @@ async def test_an_interrupted_import_goes_on_after_what_it_got_to(recorder_mock,
     assert await hass.config_entries.async_unload(entry.entry_id)
     _notify(hass, "mobile_app_phone", "Second", Context())
     await async_wait_recording_done(hass)
-    hass.config_entries.async_update_entry(entry, data={"import_before": dt_util.utcnow().timestamp()})
+    hass.config_entries.async_update_entry(entry, data={IMPORT_BEFORE: dt_util.utcnow().timestamp()})
 
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done(wait_background_tasks=True)
 
     assert [r.message for r in await _records(entry)] == ["First", "Second"]
-    assert "import_before" not in entry.data
+    assert IMPORT_BEFORE not in entry.data
+    assert (await entry.runtime_data.store.async_statistics(None, (0, 4e9), (0, 0))).rows[0][2] == 2
 
 
 async def test_a_failing_event_is_skipped(recorder_mock, hass: HomeAssistant) -> None:

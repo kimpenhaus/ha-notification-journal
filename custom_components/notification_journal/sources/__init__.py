@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID, ATTR_FLOOR_ID, ATTR_LABEL_ID
-from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.util.ulid import ulid_now
 
 from ..models import NotificationRecord
@@ -25,23 +25,8 @@ type Listener = tuple[str, Callable[[Event], Any], Callable[[dict[str, Any]], bo
 class EventSource(Protocol):
     """A source that records events of the bus; the recorder import replays old ones through the same listeners."""
 
-    name: str
-
     def listeners(self) -> list[Listener]:
         """Return what the source listens to."""
-
-
-@callback
-def async_listen(hass: HomeAssistant, source: EventSource) -> CALLBACK_TYPE:
-    """Listen to the events of a source; return what stops it."""
-    removers = [hass.bus.async_listen(kind, handler, event_filter=check) for kind, handler, check in source.listeners()]
-
-    @callback
-    def _stop() -> None:
-        for remove in removers:
-            remove()
-
-    return _stop
 
 
 def as_list(value: Any) -> list[Any]:

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.const import ATTR_ENTITY_ID, EVENT_CALL_SERVICE
-from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import target
 
 from ..models import Answer, Call, NotificationRecord, Recipient
@@ -19,7 +19,7 @@ from ..recipients import (
     legacy_group_members,
 )
 from ..store import NotificationStore
-from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, Listener, as_list, async_listen, new_record
+from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, Listener, as_list, new_record
 
 GROUP_CALL_WINDOW = 5.0
 EVENT_NOTIFICATION_ACTION = "mobile_app_notification_action"
@@ -69,10 +69,6 @@ class NotifySource:
     def listeners(self) -> list[Listener]:
         """The calls of notify actions and the answers to their buttons."""
         return [(EVENT_CALL_SERVICE, self._handle, _is_notify), (EVENT_NOTIFICATION_ACTION, self._handle_answer, None)]
-
-    def async_start(self) -> CALLBACK_TYPE:
-        """Listen to the calls of notify actions and to the answers to their buttons."""
-        return async_listen(self._hass, self)
 
     async def _handle_answer(self, event: Event) -> None:
         action = event.data.get(ATTR_ACTION)

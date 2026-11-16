@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
-import logging
-import re
-import sqlite3
-from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
@@ -47,10 +41,8 @@ from .sources.notify import NotifySource
 from .sources.persistent import PersistentNotificationSource
 from .sources.speech import SpeechSource
 from .sources.telegram import TelegramSource
-from .store import SCHEMA_VERSION, NewerSchemaError, NotificationStore
+from .store import NewerSchemaError, NotificationStore, remove_database
 from .websocket_api import async_register
-
-_LOGGER = logging.getLogger(__name__)
 
 PURGE_INTERVAL = timedelta(days=1)
 IMPORT_BEFORE = "import_before"
@@ -64,9 +56,8 @@ class RuntimeData:
 
     store: NotificationStore
     stop: list[CALLBACK_TYPE] = field(default_factory=list)
-    """What feeds the store: the sources, the purge timer and the change forwarding, stopped before it closes."""
-    importing: asyncio.Task[None] | None = None
-    """The import from the recorder, cancelled before the store closes."""
+    """What feeds the store: the sources, the import, the purge timer and the change forwarding, stopped before it
+    closes."""
 
 
 type NotificationJournalConfigEntry = ConfigEntry[RuntimeData]
@@ -84,11 +75,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
     options = {**DEFAULT_OPTIONS, **entry.options}
     store = NotificationStore(hass.config.path(DATABASE_FILE))
     try:
-        await store.async_open()
+        created = await store.async_open()
     except NewerSchemaError as err:
         await store.async_close()
         raise ConfigEntryError(str(err)) from err
-    if store.created:
+    if created:
         hass.config_entries.async_update_entry(entry, data={**entry.data, IMPORT_BEFORE: dt_util.utcnow().timestamp()})
     runtime = RuntimeData(store=store)
     try:
@@ -101,11 +92,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
         raise
     entry.runtime_data = runtime
     if (before := entry.data.get(IMPORT_BEFORE)) is not None:
-        runtime.importing = entry.async_create_background_task(
+        importing = entry.async_create_background_task(
             hass,
             _import(hass, entry, sources, dt_util.utc_from_timestamp(before), options),
             "notification_journal import",
         )
+        runtime.stop.append(importing.cancel)
 
     async_register_panel(
         hass,
@@ -121,39 +113,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
 async def async_unload_entry(hass: HomeAssistant, entry: NotificationJournalConfigEntry) -> bool:
     """Unload the config entry: stop everything that writes to the store, then close it."""
     _stop(entry.runtime_data)
-    if (importing := entry.runtime_data.importing) is not None:
-        importing.cancel()
-        with suppress(asyncio.CancelledError):
-            await importing
     await entry.runtime_data.store.async_close()
     return True
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: NotificationJournalConfigEntry) -> None:
     """Remove the journal with the integration, so a new setup starts empty and imports from the recorder again."""
-    await hass.async_add_executor_job(_remove_database, Path(hass.config.path(DATABASE_FILE)))
-
-
-def _remove_database(database: Path) -> None:
-    """Delete the database, its WAL and SHM files and the copies made before migrations.
-
-    A database of a newer version, which setup refused, stays: it belongs to the version that wrote it.
-    """
-    if database.exists() and _schema_version(database) > SCHEMA_VERSION:
-        _LOGGER.warning("Kept %s: a newer version of Notification Journal wrote it", database)
-        return
-    own = re.compile(rf"{re.escape(database.name)}(-wal|-shm|\.bak-v\d+)?")
-    for path in database.parent.iterdir():
-        if own.fullmatch(path.name):
-            path.unlink(missing_ok=True)
-
-
-def _schema_version(database: Path) -> int:
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
-    try:
-        return connection.execute("PRAGMA user_version").fetchone()[0]
-    finally:
-        connection.close()
+    await hass.async_add_executor_job(remove_database, hass.config.path(DATABASE_FILE))
 
 
 async def _import(
@@ -163,24 +129,20 @@ async def _import(
     before: datetime,
     options: dict,
 ) -> None:
-    """Import from the recorder once, after what an interrupted import got to, then purge and reload the panels.
-
-    The records are reported to the panels once at the end instead of one by one.
-    """
+    """Import from the recorder once and purge; an import cut short starts over. Open panels reload once at the end."""
     store = entry.runtime_data.store
-    store.quiet = True
-    try:
-        await async_import(hass, sources, await store.async_newest_imported(), before)
-        await store.async_flush()
-    finally:
-        store.quiet = False
+    async with store.async_batch():
+        await store.async_forget_imported()
+        await async_import(hass, sources, before)
+        await store.async_purge(*_purge_limits(options))
     hass.config_entries.async_update_entry(
         entry, data={key: value for key, value in entry.data.items() if key != IMPORT_BEFORE}
     )
-    await store.async_purge(
-        int(options[CONF_RETENTION_DAYS]), int(options[CONF_MAX_ENTRIES]), int(options[CONF_STATISTICS_YEARS])
-    )
-    store.reload()
+
+
+def _purge_limits(options: dict) -> tuple[int, int, int]:
+    """Return how long and how many notifications are kept, and for how many years the counts."""
+    return int(options[CONF_RETENTION_DAYS]), int(options[CONF_MAX_ENTRIES]), int(options[CONF_STATISTICS_YEARS])
 
 
 def _start(
@@ -191,15 +153,11 @@ def _start(
     options: dict,
 ) -> list[EventSource]:
     """Start the purge, the forwarding of changes to subscribers and the event sources; return the sources."""
-    retention_days = int(options[CONF_RETENTION_DAYS])
-    max_entries = int(options[CONF_MAX_ENTRIES])
-    statistics_years = int(options[CONF_STATISTICS_YEARS])
+    limits = _purge_limits(options)
 
     @callback
     def _purge(_now: datetime | None = None) -> None:
-        entry.async_create_background_task(
-            hass, store.async_purge(retention_days, max_entries, statistics_years), "notification_journal purge"
-        )
+        entry.async_create_background_task(hass, store.async_purge(*limits), "notification_journal purge")
 
     async def _publish(change: str, record_id: str) -> None:
         record = None
@@ -227,9 +185,10 @@ def _start(
         (CONF_RECORD_TELEGRAM, TelegramSource),
     ):
         if options[option]:
-            sources.append(source(hass, store, excluded_channels=excluded))
-    for started in sources:
-        stop.append(started.async_start())
+            sources.append(started := source(hass, store, excluded_channels=excluded))
+            stop.extend(
+                hass.bus.async_listen(kind, handler, event_filter=check) for kind, handler, check in started.listeners()
+            )
     return sources
 
 

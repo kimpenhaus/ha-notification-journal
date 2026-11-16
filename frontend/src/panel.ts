@@ -304,13 +304,13 @@ export class NotificationJournalPanel extends LitElement {
       window.clearTimeout(this._statisticsTimer);
       this._statisticsTimer = window.setTimeout(() => void this._statistics?.refresh(), 2000);
     }
-    if (event.change === "removed" || event.change === "reload") {
-      if (event.change === "removed") {
-        this._removed(event.record_id);
-      } else {
-        void this._load();
-        void this._loadFacets();
-      }
+    if (event.change === "removed") {
+      this._removed(event.record_id);
+      return;
+    }
+    if (event.change === "reload") {
+      void this._load();
+      void this._loadFacets();
       return;
     }
     const { change, record } = event;
