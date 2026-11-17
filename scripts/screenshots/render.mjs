@@ -90,11 +90,10 @@ for (const theme of ["light", "dark"]) {
   await shot(`statistics-${theme}`, query, { width: 1280, height: 1400 }, statistics, statisticsEnd);
   await shot(`mobile-${theme}`, `${query}&narrow=1`, { width: 390, height: 844 }, async () => {}, null);
 
-  await frame(`hero-${theme}`, `theme=${theme}&layout=hero&a=timeline-${theme}&b=mobile-${theme}`);
+  await frame(`hero-nordic-${theme}`, `theme=${theme}&layout=hero&a=timeline-${theme}&b=mobile-${theme}`);
   for (const view of ["timeline", "automations", "statistics"]) {
-    await frame(`${view}-${theme}`, `theme=${theme}&layout=window&a=${view}-${theme}`);
+    await frame(`${view}-nordic-${theme}`, `theme=${theme}&layout=window&a=${view}-${theme}`);
   }
-  await frame(`mobile-${theme}`, `theme=${theme}&layout=phone&a=mobile-${theme}`);
 }
 console.log(errors.length ? errors.join("\n") : "no console errors");
 await browser.close();
