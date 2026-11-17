@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/kimpenhaus/ha-notification-journal/compare/v0.3.0...v0.3.1) (2026-11-17)
+
+
+### Miscellaneous Chores
+
+* release 0.3.1 ([#76](https://github.com/kimpenhaus/ha-notification-journal/issues/76)) ([53e665a](https://github.com/kimpenhaus/ha-notification-journal/commit/53e665a3c2fca2073d11849437eff4515db70ce6))
+
 ## [0.3.0](https://github.com/kimpenhaus/ha-notification-journal/compare/v0.2.0...v0.3.0) (2026-11-16)
 
 
