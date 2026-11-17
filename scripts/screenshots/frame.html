@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=block" />
     <style>
-      /* Frames for the raw screenshots: a browser window, a phone, or both as the README's opening picture. */
+      /* Frames for the raw screenshots: a browser window, or a window and a phone as the README's opening picture. */
       html, body { margin: 0; background: transparent; font-family: Roboto, sans-serif; }
       body {
         --chrome: #e5e9f0; --chrome-edge: #d8dee9; --address: #eceff4; --address-text: #4c566a;
@@ -68,8 +68,7 @@
         return frame;
       };
       const layout = params.get("layout");
-      if (layout === "phone") stage.append(await phone(params.get("a")));
-      else stage.append(await browser(params.get("a")));
+      stage.append(await browser(params.get("a")));
       if (layout === "hero") {
         stage.classList.add("hero");
         stage.append(await phone(params.get("b")));

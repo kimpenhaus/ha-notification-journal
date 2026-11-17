@@ -5,8 +5,8 @@ A Home Assistant integration that keeps a journal of every notification your hom
 Home Assistant forgets a notification the moment it is sent. Notification Journal records it as it goes out, without changing your automations, and keeps it searchable.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/hero-dark.png">
-  <img src="docs/screenshots/hero-light.png" alt="Notification Journal on a computer and a phone" width="720">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/hero-nordic-dark.png">
+  <img src="docs/screenshots/hero-nordic-light.png" alt="Notification Journal on a computer and a phone" width="720">
 </picture>
 
 ## Features
@@ -93,14 +93,34 @@ Old entries are deleted once a day (*Retention*); the hourly counts stay as long
 
 ## Screenshots
 
-| Light | Dark |
-|-------|------|
-| <img src="docs/screenshots/timeline-light.png" alt="Timeline, light" width="360"> | <img src="docs/screenshots/timeline-dark.png" alt="Timeline, dark" width="360"> |
-| <img src="docs/screenshots/automations-light.png" alt="Grouped by automation, light" width="360"> | <img src="docs/screenshots/automations-dark.png" alt="Grouped by automation, dark" width="360"> |
-| <img src="docs/screenshots/statistics-light.png" alt="Statistics, light" width="360"> | <img src="docs/screenshots/statistics-dark.png" alt="Statistics, dark" width="360"> |
-| <img src="docs/screenshots/mobile-light.png" alt="Phone, light" width="200"> | <img src="docs/screenshots/mobile-dark.png" alt="Phone, dark" width="200"> |
+Made-up data in the [Nordic theme](https://github.com/coltondick/nordic-theme-main) (`nordic-blue`), light or dark as GitHub shows this page; the panel follows whichever theme you use.
 
-The screenshots show made-up data in the [Nordic theme](https://github.com/coltondick/nordic-theme-main) (`nordic-blue`); the panel follows whichever theme you use.
+### Timeline
+
+Every day with its notifications; a notification shows its picture, the buttons and who tapped them, and whom a group reached.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/timeline-nordic-dark.png">
+  <img src="docs/screenshots/timeline-nordic-light.png" alt="Timeline" width="720">
+</picture>
+
+### Grouped by automation
+
+Each automation, script or integration with its notifications, folded or open.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/automations-nordic-dark.png">
+  <img src="docs/screenshots/automations-nordic-light.png" alt="Grouped by automation" width="720">
+</picture>
+
+### Statistics
+
+Who notifies how much and when, compared with the period before.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/statistics-nordic-dark.png">
+  <img src="docs/screenshots/statistics-nordic-light.png" alt="Statistics" width="720">
+</picture>
 
 ## Similar projects
 
