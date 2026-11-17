@@ -49,7 +49,15 @@ The panel is registered with `frontend.async_register_built_in_panel` as a custo
 
 The icon (`custom_components/notification_journal/brand/`) is drawn in `icon.svg`; the PNGs are rendered from it with `magick -background none -density 192 icon.svg -resize 256x256 icon.png` (and `-density 384 … 512x512 icon@2x.png`). The sidebar shows the same motif as a single-colour 24 px icon, `notification_journal:bell-stack`, from the icon set in `frontend/src/iconset.ts`; Home Assistant loads that script with every frontend (`frontend.add_extra_js_url`).
 
-The screenshots in `docs/screenshots/` are rendered from made-up data with a mock Home Assistant in headless Chromium (`scripts/screenshots/`): build the panel, then `scripts/screenshots/render.sh`.
+The screenshots in `docs/screenshots/` are rendered from made-up data with a mock Home Assistant in headless Chromium (`scripts/screenshots/`): build the panel, then `scripts/screenshots/render.sh`. `render.mjs` fixes the clock to Saturday, 21 November 2026, 16:40 UTC, so the mock data (`readme-data.js`) and the timestamps in the camera snapshots fit together. The page `readme.html` carries the colours of the Nordic theme (`nordic-blue`), resolved from its YAML; `frame.html` puts the raw shots into a browser window or a phone and composes `hero-*.png`, the README's opening picture.
+
+The camera snapshots are CC0 photos from Wikimedia Commons, cropped to 16:9 and given a camera overlay and a detection box with ImageMagick:
+
+| File | Source |
+|------|--------|
+| `garden-fox.jpg` | [Red fox in yard, Charlton MA](https://commons.wikimedia.org/wiki/File:Red_fox_in_yard,_Charlton_MA_2025-12-26.jpg), Peter Cooper Jr. |
+| `garden-hedgehog.jpg` | [Hedgehog on unkempt lawn](https://commons.wikimedia.org/wiki/File:Hedgehog_on_unkempt_lawn.jpg), Frogner Natur |
+| `street-car.jpg` | [House in Wildwood New Jersey with car parked in front](https://commons.wikimedia.org/wiki/File:House_in_Wildwood_New_Jersey_with_car_parked_in_front.jpg), Tomwsulcer |
 
 ## WebSocket API
 

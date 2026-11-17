@@ -3,29 +3,37 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=block" />
     <style>
       html, body { margin: 0; height: 100%; }
-      /* Home Assistant's default theme (frontend src/resources/theme), light and dark; the panel has no fallbacks. */
+      /*
+       * The Nordic theme's blue variant (github.com/coltondick/nordic-theme-main, themes/nordic-blue.yaml), light and
+       * dark, resolved to the variables the panel reads; the chart colours are Home Assistant's, the theme keeps them.
+       */
       body {
-        font-family: Roboto, Noto, sans-serif;
-        --ha-font-family-body: Roboto, Noto, sans-serif; --ha-font-family-code: monospace;
-        --primary-color: #009ac7; --text-primary-color: #ffffff;
-        --light-primary-color: #b3e5fc; --text-light-primary-color: #212121;
-        --primary-background-color: #fafafa; --secondary-background-color: #e5e5e5;
-        --card-background-color: #ffffff; --primary-text-color: #141414; --secondary-text-color: #5e5e5e;
-        --disabled-text-color: #bdbdbd; --divider-color: rgba(0, 0, 0, 0.12); --shadow-color: rgba(0, 0, 0, 0.16);
-        --app-header-background-color: #ffffff; --app-header-text-color: #141414;
+        font-family: Roboto, sans-serif;
+        --ha-font-family-body: Roboto, sans-serif; --ha-font-family-code: monospace;
+        --primary-color: #5e81ac; --text-primary-color: #eceff4;
+        --light-primary-color: #fafeff; --text-light-primary-color: #3b4252;
+        --primary-background-color: #eceff4; --secondary-background-color: #eceff4;
+        --card-background-color: #fafeff; --primary-text-color: #3b4252; --secondary-text-color: #4c566a;
+        --disabled-text-color: #7a7a7a; --divider-color: #d8dee9; --shadow-color: rgba(17, 35, 52, 0.2);
+        --app-header-background-color: #4c566a; --app-header-text-color: #eceff4;
         --app-header-border-bottom: 1px solid var(--divider-color);
-        --success-color: #43a047; --error-color: #db4437; --warning-color: #ffa600; --info-color: #039be5;
+        --success-color: #74876e; --error-color: #bf616a; --warning-color: #9f6e62; --info-color: #5e81ac;
+        --ha-card-box-shadow: 3px 3px 13px -6px rgba(17, 35, 52, 0.2); --ha-card-border-radius: 5px;
+        --ha-card-border-color: transparent;
         --color-1: #4269d0; --color-2: #f4bd4a; --color-3: #ff725c; --color-4: #6cc5b0; --color-5: #a463f2;
         --color-6: #ff8ab7;
         background: var(--primary-background-color);
       }
       body.dark {
-        --primary-background-color: #111111; --secondary-background-color: #282828; --card-background-color: #1c1c1c;
-        --primary-text-color: #e1e1e1; --secondary-text-color: #9b9b9b; --disabled-text-color: #6f6f6f;
-        --divider-color: rgba(225, 225, 225, 0.12); --shadow-color: rgba(0, 0, 0, 0.48);
-        --app-header-background-color: #1c1c1c; --app-header-text-color: #e1e1e1;
+        --light-primary-color: #3b4252; --text-light-primary-color: #eceff4;
+        --primary-background-color: #2e3440; --secondary-background-color: #2e3440; --card-background-color: #3b4252;
+        --primary-text-color: #eceff4; --secondary-text-color: #e5e9f0; --disabled-text-color: #d8dee9;
+        --divider-color: #4c566a; --shadow-color: rgba(17, 35, 52, 1);
+        --success-color: #a3be8c; --error-color: #c6767f; --warning-color: #d08770; --info-color: #7392b7;
+        --ha-card-box-shadow: 3px 3px 13px -6px rgba(17, 35, 52, 1);
       }
     </style>
     <script src="readme-data.js"></script>
