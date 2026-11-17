@@ -4,7 +4,10 @@ A Home Assistant integration that keeps a journal of every notification your hom
 
 Home Assistant forgets a notification the moment it is sent. Notification Journal records it as it goes out, without changing your automations, and keeps it searchable.
 
-<img src="docs/screenshots/timeline-light.png" alt="Notification Journal in the light theme" width="640">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/hero-dark.png">
+  <img src="docs/screenshots/hero-light.png" alt="Notification Journal on a computer and a phone" width="720">
+</picture>
 
 ## Features
 
@@ -97,7 +100,7 @@ Old entries are deleted once a day (*Retention*); the hourly counts stay as long
 | <img src="docs/screenshots/statistics-light.png" alt="Statistics, light" width="360"> | <img src="docs/screenshots/statistics-dark.png" alt="Statistics, dark" width="360"> |
 | <img src="docs/screenshots/mobile-light.png" alt="Phone, light" width="200"> | <img src="docs/screenshots/mobile-dark.png" alt="Phone, dark" width="200"> |
 
-The screenshots show made-up data in Home Assistant's default theme.
+The screenshots show made-up data in the [Nordic theme](https://github.com/coltondick/nordic-theme-main) (`nordic-blue`); the panel follows whichever theme you use.
 
 ## Similar projects
 
