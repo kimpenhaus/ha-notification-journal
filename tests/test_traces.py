@@ -69,3 +69,28 @@ async def test_a_step_that_continues_on_error_fails_its_notification(hass: HomeA
 
     assert records["Lost"].status == Status.FAILED
     assert records["After"].status == Status.SENT
+
+
+async def test_only_the_notification_with_the_failed_text_fails(hass: HomeAssistant, phones: None) -> None:
+    runtime = await _setup(hass)
+    script = {
+        "sequence": [
+            _notify("broken", "First", continue_on_error=True),
+            _notify("broken", "Second", continue_on_error=True),
+        ]
+    }
+    hass.services.async_remove("notify", "broken")
+    calls: list[str] = []
+
+    async def broken_once(call: ServiceCall) -> None:
+        calls.append(call.data["message"])
+        if len(calls) == 2:
+            raise HomeAssistantError("Chat not found")
+
+    hass.services.async_register("notify", "broken", broken_once)
+    assert await async_setup_component(hass, "script", {"script": {"twice": script}})
+
+    await hass.services.async_call("script", "twice", blocking=True)
+    records = await _records(hass, runtime)
+
+    assert (records["First"].status, records["Second"].status) == (Status.SENT, Status.FAILED)

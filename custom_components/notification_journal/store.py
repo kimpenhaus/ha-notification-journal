@@ -631,7 +631,8 @@ class NotificationStore:
             if failed is None:
                 return
             calls = [replace(c, error=error) if c is failed else c for c in calls]
-            status, record_error = _group_status(calls), None
+            record_error = record.error
+            status = Status.FAILED if record_error else _group_status(calls)
         elif record.status in (Status.FAILED, Status.PARTIAL):
             return
         else:
