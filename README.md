@@ -75,7 +75,7 @@ Every card shows a status:
 | Open | A notification under the bell that is still there. |
 | Dismissed | Removed from the bell, with the time and who did it. |
 | Replaced | Home Assistant replaced it under the bell with a newer one of the same ID. |
-| Failed | Sending failed, with Home Assistant's error. For the Companion app this is what it logs when a push fails (push server unreachable, timeout, rate limit), as it does not raise an error then. |
+| Failed | Sending failed, with Home Assistant's error: an action that raised it inside an automation or script (as its trace shows), or what the Companion app logs when a push fails (push server unreachable, timeout, rate limit), as it does not raise an error then. An action called from the developer tools that raises leaves no trace to read. |
 | Partly failed | A group whose members failed in part; the error is shown at each failed member. |
 | Answered | Someone tapped one of its buttons in the Companion app. |
 

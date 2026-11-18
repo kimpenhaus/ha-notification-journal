@@ -2,7 +2,8 @@
   "domain": "notification_journal",
   "name": "Notification Journal",
   "after_dependencies": [
-    "recorder"
+    "recorder",
+    "trace"
   ],
   "categories": [
     "messaging_notifications"
