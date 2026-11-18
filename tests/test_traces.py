@@ -27,7 +27,7 @@ async def _setup(hass: HomeAssistant) -> RuntimeData:
     entry = MockConfigEntry(domain=DOMAIN, options=DEFAULT_OPTIONS)
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done(wait_background_tasks=True)
+    await hass.async_block_till_done()
     return entry.runtime_data
 
 
@@ -71,15 +71,14 @@ async def test_a_step_that_continues_on_error_fails_its_notification(hass: HomeA
     assert records["After"].status == Status.SENT
 
 
-async def test_only_the_notification_with_the_failed_text_fails(hass: HomeAssistant, phones: None) -> None:
+async def test_only_the_notification_with_the_failed_text_fails(hass: HomeAssistant) -> None:
     runtime = await _setup(hass)
     script = {
         "sequence": [
-            _notify("broken", "First", continue_on_error=True),
-            _notify("broken", "Second", continue_on_error=True),
+            _notify("flaky", "First", continue_on_error=True),
+            _notify("flaky", "Second", continue_on_error=True),
         ]
     }
-    hass.services.async_remove("notify", "broken")
     calls: list[str] = []
 
     async def broken_once(call: ServiceCall) -> None:
@@ -87,7 +86,7 @@ async def test_only_the_notification_with_the_failed_text_fails(hass: HomeAssist
         if len(calls) == 2:
             raise HomeAssistantError("Chat not found")
 
-    hass.services.async_register("notify", "broken", broken_once)
+    hass.services.async_register("notify", "flaky", broken_once)
     assert await async_setup_component(hass, "script", {"script": {"twice": script}})
 
     await hass.services.async_call("script", "twice", blocking=True)

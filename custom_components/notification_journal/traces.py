@@ -1,10 +1,10 @@
 """Mark a notification failed when the action that sent it raised an error inside an automation or script.
 
 Home Assistant keeps the error of each step in the trace of the run; every notification sent by an automation or
-script carries the key and run of that trace. An automation or script writes its state when a run starts and ends,
-so the journal reads the trace of the runs it waits for then, and once more right away for a run that already ended.
-Each failed step is used once; a run is forgotten once its trace reads stopped, which Home Assistant marks only a
-moment after the state was written, so at the next check, or after a day.
+script carries the key and run of that trace. The journal takes note of the run when a source records the
+notification, before the action runs, and reads the trace whenever the automation or script writes its state, at the
+start and end of each run. Each failed step is used once; a run is forgotten once its trace reads stopped, which Home
+Assistant marks a moment after the last state was written, so at a later check, or after a day.
 """
 
 from __future__ import annotations
@@ -15,18 +15,17 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.trace.util import async_get_trace
-from homeassistant.const import ATTR_ENTITY_ID, EVENT_STATE_CHANGED
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from .const import SIGNAL_CHANGED
 from .models import NotificationRecord
+from .recipients import NOTIFY_DOMAIN, SEND_MESSAGE
+from .sources import ATTR_MESSAGE
+from .sources.telegram import TELEGRAM_DOMAIN, TEXT_FIELDS
 from .store import NotificationStore
 
 FORGET_AFTER = timedelta(days=1)
-"""A run still waited for after this long is forgotten."""
 
 Run = tuple[str, str]
 
@@ -47,60 +46,51 @@ class RunWatcher:
         self._hass = hass
         self._store = store
         self._runs: dict[str, dict[Run, _Waiting]] = {}
+        self._tracking: dict[str, CALLBACK_TYPE] = {}
         self._checking: dict[str, asyncio.Task[None]] = {}
-        self._again: set[str] = set()
+        self._due: set[str] = set()
 
     def start(self) -> CALLBACK_TYPE:
         """Start waiting; return how to stop."""
         stops = [
-            async_dispatcher_connect(self._hass, SIGNAL_CHANGED, self._changed),
-            self._hass.bus.async_listen(EVENT_STATE_CHANGED, self._state_changed, event_filter=self._waited_for),
-            async_track_time_interval(self._hass, self._forget, timedelta(hours=1)),
+            self._store.on_add(self._added),
+            async_track_time_interval(self._hass, self._forget, FORGET_AFTER / 24),
         ]
 
         @callback
         def stop() -> None:
-            for remove in stops:
+            for remove in [*stops, *self._tracking.values()]:
                 remove()
             for task in self._checking.values():
                 task.cancel()
-            self._runs.clear()
 
         return stop
 
     @callback
-    def _changed(self, change: str, record_id: str, record: NotificationRecord | None) -> None:
-        origin = record.origin if record else None
-        if change != "added" or origin is None or not (origin.entity_id and origin.trace_key and origin.run_id):
+    def _added(self, record: NotificationRecord) -> None:
+        origin = record.origin
+        if not (origin.entity_id and origin.trace_key and origin.run_id):
             return
         runs = self._runs.setdefault(origin.entity_id, {})
         runs.setdefault((origin.trace_key, origin.run_id), _Waiting(dt_util.utcnow())).records.append(record)
-        self._schedule(origin.entity_id)
-
-    @callback
-    def _waited_for(self, event_data: dict[str, Any]) -> bool:
-        return event_data.get(ATTR_ENTITY_ID) in self._runs
+        if origin.entity_id not in self._tracking:
+            self._tracking[origin.entity_id] = async_track_state_change_event(
+                self._hass, origin.entity_id, self._state_changed
+            )
 
     @callback
     def _state_changed(self, event: Event) -> None:
-        self._schedule(event.data[ATTR_ENTITY_ID])
-
-    @callback
-    def _schedule(self, entity_id: str) -> None:
-        """Check an entity's runs, once more after a check that is running already; never two at a time."""
-        if entity_id in self._checking:
-            self._again.add(entity_id)
-        elif entity_id in self._runs:
+        entity_id = event.data["entity_id"]
+        self._due.add(entity_id)
+        if entity_id not in self._checking:
             self._checking[entity_id] = self._hass.async_create_task(self._check(entity_id), eager_start=False)
 
     async def _check(self, entity_id: str) -> None:
         try:
-            while True:
-                self._again.discard(entity_id)
+            while entity_id in self._due:
+                self._due.discard(entity_id)
                 for run, waiting in list(self._runs.get(entity_id, {}).items()):
                     await self._check_run(entity_id, run, waiting)
-                if entity_id not in self._again:
-                    break
         finally:
             self._checking.pop(entity_id, None)
 
@@ -124,6 +114,8 @@ class RunWatcher:
         runs.pop(run, None)
         if not runs:
             self._runs.pop(entity_id, None)
+            if (untrack := self._tracking.pop(entity_id, None)) is not None:
+                untrack()
 
     @callback
     def _forget(self, _now: datetime) -> None:
@@ -145,18 +137,22 @@ def _failed_steps(trace: dict[str, Any]) -> list[tuple[tuple[str, int], dict[str
 
 
 def _sent_by(records: list[NotificationRecord], params: dict[str, Any]) -> NotificationRecord | None:
-    """The notification a step's action call sent: the same action and the same text, else none."""
-    action = f"{params.get('domain')}.{params.get('service')}"
-    texts = {str(value).strip() for value in (params.get("service_data") or {}).values() if isinstance(value, str)}
+    """The notification a step's action call sent: the same action and the same text, else none.
+
+    A notification's channel is the action that sent it, except for notify.send_message, whose channel holds the
+    notify entities it targets.
+    """
+    domain, service = params.get("domain"), params.get("service")
+    action = f"{domain}.{service}"
+    field = TEXT_FIELDS.get(service, ATTR_MESSAGE) if domain == TELEGRAM_DOMAIN else ATTR_MESSAGE
+    text = str((params.get("service_data") or {}).get(field) or "").strip()
+    sends_message = action == f"{NOTIFY_DOMAIN}.{SEND_MESSAGE}"
     return next(
         (
             record
             for record in records
-            if record.message.strip() in texts
-            and (
-                action in (record.channel, record.group)
-                or (action == "notify.send_message" and record.source == "notify")
-            )
+            if record.message.strip() == text
+            and (record.channel == action or (sends_message and record.source == NOTIFY_DOMAIN))
         ),
         None,
     )
