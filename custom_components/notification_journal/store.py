@@ -289,6 +289,13 @@ def _where(query: Query) -> tuple[str, list[Any]]:
     return (f"WHERE {' AND '.join(where)}" if where else ""), params
 
 
+def _group_status(calls: list[Call]) -> Status:
+    """A group failed once every member failed, and in part while some went through; members that are groups
+    themselves do not count, their own members do."""
+    members = [call for call in calls if not call.group]
+    return Status.FAILED if all(call.error for call in members) else Status.PARTIAL
+
+
 def _fts_query(text: str) -> str | None:
     terms = ['"' + term.replace('"', '""') + '"*' for term in text.split() if any(ch.isalnum() for ch in term)]
     return " AND ".join(terms) or None
@@ -607,6 +614,9 @@ class NotificationStore:
                 (json.dumps(asdict(call)), row[0]),
             )
             record = replace(before, inner_calls=[*before.inner_calls, call])
+            if before.status in (Status.FAILED, Status.PARTIAL):
+                record.status = _group_status(record.inner_calls)
+                db.execute("UPDATE notifications SET status = ? WHERE rowid = ?", (record.status.value, row[0]))
             self._index(db, row[0], record)
             self._recount(db, before, record)
 
@@ -618,11 +628,14 @@ class NotificationStore:
             if record is None:
                 return
             calls = record.inner_calls
-            failed = next((c for c in calls if c.channel == channel and c.error is None), None)
-            if failed is not None:
+            if calls:
+                failed = next((c for c in calls if c.channel == channel and c.error is None and not c.group), None)
+                if failed is None:
+                    return
                 calls = [replace(c, error=error) if c is failed else c for c in calls]
-                status = Status.FAILED if all(c.error for c in calls) else Status.PARTIAL
-                error = None if status is Status.PARTIAL else record.error or error
+                status, error = _group_status(calls), None
+            elif record.status is Status.FAILED:
+                return
             else:
                 status = Status.FAILED
             db.execute(

@@ -34,6 +34,7 @@ export interface Call {
   recipients: Recipient[];
   context_id: string;
   error?: string | null;
+  group?: boolean;
 }
 
 export interface NotificationRecord {

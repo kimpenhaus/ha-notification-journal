@@ -79,6 +79,8 @@ class Call:
     recipients: list[Recipient]
     context_id: str
     error: str | None = None
+    group: bool = False
+    """The member is itself a group, whose members are calls of their own."""
 
 
 @dataclass(slots=True)
@@ -168,4 +170,5 @@ def call_from_dict(data: dict[str, Any]) -> Call:
         recipients=[recipient_from_dict(r) for r in data["recipients"]],
         context_id=data["context_id"],
         error=data.get("error"),
+        group=data.get("group", False),
     )

@@ -2,10 +2,13 @@
 
 import logging
 from contextvars import Context
+from unittest.mock import patch
 
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.notification_journal import failures
 
 from custom_components.notification_journal import RuntimeData
 from custom_components.notification_journal.const import DEFAULT_OPTIONS, DOMAIN
@@ -17,11 +20,11 @@ FAILED = "Error sending notification to {}"
 RATE_LIMIT = "Rate limit exceeded sending notification to {}"
 
 
-def _phone(hass: HomeAssistant, name: str, *, error: str | None = None, level: int = logging.ERROR) -> None:
+def _phone(hass: HomeAssistant, name: str, *errors: str, level: int = logging.ERROR) -> None:
     """A notify action that logs like the Companion app's when its push fails, and succeeds all the same."""
 
     async def send(call: ServiceCall) -> None:
-        if error:
+        for error in errors:
             logging.getLogger(MOBILE_APP_LOGGER).log(level, error.format(name))
 
     hass.services.async_register("notify", name, send)
@@ -35,9 +38,14 @@ async def _setup(hass: HomeAssistant) -> RuntimeData:
     return entry.runtime_data
 
 
-async def _family(hass: HomeAssistant) -> None:
-    group = {"platform": "group", "name": "family", "services": [{"action": "phone_anna"}, {"action": "phone_ben"}]}
-    assert await async_setup_component(hass, "notify", {"notify": [group]})
+async def _family(hass: HomeAssistant, *, nested: bool = False) -> None:
+    def group(name: str, *members: str) -> dict:
+        return {"platform": "group", "name": name, "services": [{"action": member} for member in members]}
+
+    groups = [group("family", "phone_anna", "kids"), group("kids", "phone_ben")] if nested else []
+    assert await async_setup_component(
+        hass, "notify", {"notify": groups or [group("family", "phone_anna", "phone_ben")]}
+    )
     await hass.async_block_till_done()
 
 
@@ -51,7 +59,7 @@ async def _send(hass: HomeAssistant, runtime: RuntimeData, service: str) -> Noti
 
 
 async def test_a_logged_push_error_fails_the_notification(hass: HomeAssistant) -> None:
-    _phone(hass, "phone_anna", error=FAILED)
+    _phone(hass, "phone_anna", FAILED)
     runtime = await _setup(hass)
 
     record = await _send(hass, runtime, "phone_anna")
@@ -61,7 +69,7 @@ async def test_a_logged_push_error_fails_the_notification(hass: HomeAssistant) -
 
 
 async def test_a_rate_limit_fails_the_notification(hass: HomeAssistant) -> None:
-    _phone(hass, "phone_anna", error=RATE_LIMIT, level=logging.WARNING)
+    _phone(hass, "phone_anna", RATE_LIMIT, level=logging.WARNING)
     runtime = await _setup(hass)
 
     record = await _send(hass, runtime, "phone_anna")
@@ -70,7 +78,7 @@ async def test_a_rate_limit_fails_the_notification(hass: HomeAssistant) -> None:
 
 
 async def test_one_failed_member_fails_the_group_in_part(hass: HomeAssistant) -> None:
-    _phone(hass, "phone_anna", error=FAILED)
+    _phone(hass, "phone_anna", FAILED)
     _phone(hass, "phone_ben")
     await _family(hass)
     runtime = await _setup(hass)
@@ -83,8 +91,8 @@ async def test_one_failed_member_fails_the_group_in_part(hass: HomeAssistant) ->
 
 
 async def test_every_failed_member_fails_the_group(hass: HomeAssistant) -> None:
-    _phone(hass, "phone_anna", error=FAILED)
-    _phone(hass, "phone_ben", error=FAILED)
+    _phone(hass, "phone_anna", FAILED)
+    _phone(hass, "phone_ben", FAILED)
     await _family(hass)
     runtime = await _setup(hass)
 
@@ -108,3 +116,42 @@ async def test_other_log_lines_leave_notifications_alone(hass: HomeAssistant) ->
     await runtime.store.async_flush()
 
     assert (await runtime.store.async_get(record.id)).status == Status.SENT
+
+
+async def test_a_second_error_of_the_same_call_keeps_the_first(hass: HomeAssistant) -> None:
+    _phone(hass, "phone_anna", FAILED, "Something else about {}")
+    runtime = await _setup(hass)
+
+    record = await _send(hass, runtime, "phone_anna")
+
+    assert record.error == "Error sending notification to phone_anna"
+
+
+async def test_a_nested_group_fails_once_every_phone_failed(hass: HomeAssistant) -> None:
+    _phone(hass, "phone_anna", FAILED)
+    _phone(hass, "phone_ben", FAILED)
+    await _family(hass, nested=True)
+    runtime = await _setup(hass)
+
+    record = await _send(hass, runtime, "family")
+
+    assert record.status == Status.FAILED
+    assert [call.channel for call in record.inner_calls if call.group] == ["notify.kids"]
+
+
+async def test_an_error_naming_another_device_is_not_the_calls(hass: HomeAssistant) -> None:
+    anna = MockConfigEntry(domain="mobile_app", title="Anna's phone")
+    ben = MockConfigEntry(domain="mobile_app", title="Ben's phone")
+    for entry in (anna, ben):
+        entry.add_to_hass(hass)
+
+    with patch.object(failures, "mobile_app_entry", return_value=anna):
+        assert failures._names_target(
+            hass, "notify.mobile_app_annas_phone", "Error sending notification to Anna's phone"
+        )
+        assert not failures._names_target(
+            hass, "notify.mobile_app_annas_phone", "Error sending notification to Ben's phone"
+        )
+        assert failures._names_target(hass, "notify.mobile_app_annas_phone", "error_sending_notification")
+    with patch.object(failures, "mobile_app_entry", return_value=None):
+        assert failures._names_target(hass, "notify.mobile_app", "Error sending notification to Ben's phone")

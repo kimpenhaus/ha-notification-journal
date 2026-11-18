@@ -248,7 +248,7 @@ export class NotificationJournalRecord extends LitElement {
           </header>
           <div class="indent">
             ${this._message()} ${this._statusNote(statusText)}
-            ${record.error ? html`<p class="error">${icon(mdiAlertCircleOutline)}${record.error}</p>` : nothing}
+            ${record.error ? html`<p class="error">${icon(mdiAlertCircleOutline)}${record.error}</p>` : this._failedCalls()}
             ${this._media()} ${this._buttons()}
             <div class="chips">${this._origin()} ${this._route()} ${this._tag()}</div>
             ${this._calls ? this._innerCalls() : nothing} ${this._details ? this._detailList() : nothing}
@@ -635,6 +635,16 @@ export class NotificationJournalRecord extends LitElement {
         mdiChevronDown,
       )}
     </button>`;
+  }
+
+  /** For a group, how many of its members failed; their errors are shown at each member. */
+  private _failedCalls(): TemplateResult | typeof nothing {
+    const members = this.record.inner_calls.filter((call) => !call.group);
+    const failed = members.filter((call) => call.error).length;
+    if (!failed) return nothing;
+    return html`<p class="error">
+      ${icon(mdiAlertCircleOutline)}${this.localize("failed_calls", { count: failed, total: members.length })}
+    </p>`;
   }
 
   private _innerCalls(): TemplateResult {

@@ -110,7 +110,10 @@ class NotifySource:
             if parent.record_id is not None and not excluded:
                 for channel in channels:
                     call = Call(
-                        channel=channel, recipients=self._recipients(service, [channel]), context_id=event.context.id
+                        channel=channel,
+                        recipients=self._recipients(service, [channel]),
+                        context_id=event.context.id,
+                        group=self._group_members(service, [channel]) is not None,
                     )
                     self._store.add_inner_call(parent.record_id, call)
                 if len(channels) == 1:
