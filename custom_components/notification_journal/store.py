@@ -378,8 +378,9 @@ class NotificationStore:
         """Submit a call a group made for one of its members."""
         self._submit(self._append_call, record_id, call, notify=("updated", record_id))
 
-    def mark_failed(self, record_id: str, channel: str, error: str) -> None:
-        """Submit an error of a call: on the record, or on the member of a group, which then failed in part or whole."""
+    def mark_failed(self, record_id: str, channel: str | None, error: str) -> None:
+        """Submit an error of a call: on the member of a group with that channel, which then failed in part or whole,
+        else on the record; a channel of None fails the record unless its members already show what failed."""
         self._submit(self._mark_failed, record_id, channel, error, notify=("updated", record_id))
 
     def set_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
@@ -620,18 +621,18 @@ class NotificationStore:
             self._index(db, row[0], record)
             self._recount(db, before, record)
 
-    def _mark_failed(self, record_id: str, channel: str, error: str) -> None:
+    def _mark_failed(self, record_id: str, channel: str | None, error: str) -> None:
         db = self._db()
         if (record := self._get(record_id)) is None:
             return
         calls = record.inner_calls
-        if calls:
+        if calls and channel is not None:
             failed = next((c for c in calls if c.channel == channel and c.error is None and not c.group), None)
             if failed is None:
                 return
             calls = [replace(c, error=error) if c is failed else c for c in calls]
             status, record_error = _group_status(calls), None
-        elif record.status is Status.FAILED:
+        elif record.status in (Status.FAILED, Status.PARTIAL):
             return
         else:
             status, record_error = Status.FAILED, error

@@ -31,6 +31,7 @@
 ## Commits, Pull Requests and Releases
 
 - Every change goes through a pull request with a green `ci`, merged by squash; the pull request title becomes the commit message.
+- Before a pull request is pushed, run `/code-review`, `/simplify` and `/security-review` on its changes and work their findings in; the description says what they found and what was left out on purpose. This holds for every pull request, small fixes included.
 - Conventional Commit subjects: `type(scope): imperative summary`, lowercase, at most 50 characters. release-please derives the version and the changelog from them: `fix` is a patch, `feat` a minor version, `!` a breaking change.
 - `feat`, `fix` and `perf` end up in the release notes, so they describe what users notice; changes to CI, tooling or docs use `ci`, `chore` or `docs`, even when they repair something.
 - A pull request that resolves an issue has `Closes #<n>` in its description.

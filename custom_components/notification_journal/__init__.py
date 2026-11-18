@@ -43,6 +43,7 @@ from .sources.persistent import PersistentNotificationSource
 from .sources.speech import SpeechSource
 from .sources.telegram import TelegramSource
 from .store import NewerSchemaError, NotificationStore, remove_database
+from .traces import RunWatcher
 from .websocket_api import async_register
 
 PURGE_INTERVAL = timedelta(days=1)
@@ -181,6 +182,7 @@ def _start(
     excluded = {qualify_channel(channel) for channel in options[CONF_EXCLUDED_CHANNELS]}
     if options[CONF_RECORD_NOTIFY]:
         stop.append(watch_failures(hass, store))
+    stop.append(RunWatcher(hass, store).start())
     sources: list[EventSource] = []
     for option, source in (
         (CONF_RECORD_NOTIFY, NotifySource),
