@@ -123,6 +123,10 @@ function personAvatar(name: string, picture: string | null): TemplateResult {
     : html`<span class="avatar initials">${initials(name)}</span>`;
 }
 
+function errorLine(text: string, extra = ""): TemplateResult {
+  return html`<p class="error ${extra}">${icon(mdiAlertCircleOutline)}${text}</p>`;
+}
+
 export function recipientChip(recipient: Recipient): TemplateResult {
   let avatar: TemplateResult;
   if (recipient.kind === "person") {
@@ -248,8 +252,7 @@ export class NotificationJournalRecord extends LitElement {
           </header>
           <div class="indent">
             ${this._message()} ${this._statusNote(statusText)}
-            ${record.error ? html`<p class="error">${icon(mdiAlertCircleOutline)}${record.error}</p>` : this._failedCalls()}
-            ${this._media()} ${this._buttons()}
+            ${record.error ? errorLine(record.error) : this._failedCalls()} ${this._media()} ${this._buttons()}
             <div class="chips">${this._origin()} ${this._route()} ${this._tag()}</div>
             ${this._calls ? this._innerCalls() : nothing} ${this._details ? this._detailList() : nothing}
           </div>
@@ -483,7 +486,7 @@ export class NotificationJournalRecord extends LitElement {
 
   private _statusNote(statusText: string): TemplateResult | typeof nothing {
     const record = this.record;
-    if (!record.status_time || record.status === "failed" || record.status === "partial") return nothing;
+    if (!record.status_time) return nothing;
     const time = shortDateTimeText(this.clock, record.status_time);
     const name = record.status_by ? this._originName(record.status_by) : undefined;
     const values = { status: statusText, time, name: name ?? "" };
@@ -637,14 +640,12 @@ export class NotificationJournalRecord extends LitElement {
     </button>`;
   }
 
-  /** For a group, how many of its members failed; their errors are shown at each member. */
   private _failedCalls(): TemplateResult | typeof nothing {
-    const members = this.record.inner_calls.filter((call) => !call.group);
+    const record = this.record;
+    if (record.status !== "failed" && record.status !== "partial") return nothing;
+    const members = record.inner_calls.filter((call) => !call.group);
     const failed = members.filter((call) => call.error).length;
-    if (!failed) return nothing;
-    return html`<p class="error">
-      ${icon(mdiAlertCircleOutline)}${this.localize("failed_calls", { count: failed, total: members.length })}
-    </p>`;
+    return failed ? errorLine(this.localize("failed_calls", { count: failed, total: members.length })) : nothing;
   }
 
   private _innerCalls(): TemplateResult {
@@ -659,7 +660,7 @@ export class NotificationJournalRecord extends LitElement {
               <span class="chips"
                 >${call.recipients.filter((recipient) => recipient.id !== call.channel).map(recipientChip)}</span
               >
-              ${call.error ? html`<p class="error call-error">${icon(mdiAlertCircleOutline)}${call.error}</p>` : nothing}
+              ${call.error ? errorLine(call.error, "call-error") : nothing}
             </li>`,
         )}
       </ul>

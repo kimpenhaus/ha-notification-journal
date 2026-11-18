@@ -8,39 +8,26 @@ call, where the notify source has left which record and channel the call belongs
 from __future__ import annotations
 
 import logging
-import threading
 
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
-from homeassistant.util import dt as dt_util
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant
 
 from .recipients import MOBILE_APP_DOMAIN, NOTIFY_DOMAIN, mobile_app_entry
-from .sources.notify import SentCall, current_call
+from .sources.notify import current_call
 from .store import NotificationStore
 
 MOBILE_APP_LOGGER = "homeassistant.components.mobile_app.notify"
 
 
 class _FailureLog(logging.Handler):
-    """Hands every warning or error the Companion app logs during a recorded call to the store."""
-
     def __init__(self, hass: HomeAssistant, store: NotificationStore) -> None:
         super().__init__(logging.WARNING)
         self._hass = hass
         self._store = store
-        self.active = True
 
     def emit(self, record: logging.LogRecord) -> None:
-        if (call := current_call.get()) is None:
-            return
-        if threading.get_ident() == self._hass.loop_thread_id:
-            self._failed(call, record.getMessage())
-        else:
-            self._hass.loop.call_soon_threadsafe(self._failed, call, record.getMessage())
-
-    @callback
-    def _failed(self, call: SentCall, message: str) -> None:
-        if self.active and _names_target(self._hass, call.channel, message):
-            self._store.mark_failed(call.record_id, call.channel, message, dt_util.utcnow())
+        call = current_call.get()
+        if call is not None and _names_target(self._hass, call.channel, message := record.getMessage()):
+            self._store.mark_failed(call.record_id, call.channel, message)
 
 
 def _names_target(hass: HomeAssistant, channel: str, message: str) -> bool:
@@ -50,9 +37,11 @@ def _names_target(hass: HomeAssistant, channel: str, message: str) -> bool:
     otherwise be attributed to the call whose context it runs in.
     """
     entry = mobile_app_entry(hass, channel.removeprefix(f"{NOTIFY_DOMAIN}."))
-    if entry is None or entry.title in message:
-        return True
-    return not any(other.title in message for other in hass.config_entries.async_entries(MOBILE_APP_DOMAIN))
+    return (
+        entry is None
+        or entry.title in message
+        or not any(other.title in message for other in hass.config_entries.async_entries(MOBILE_APP_DOMAIN))
+    )
 
 
 def watch_failures(hass: HomeAssistant, store: NotificationStore) -> CALLBACK_TYPE:
@@ -60,10 +49,4 @@ def watch_failures(hass: HomeAssistant, store: NotificationStore) -> CALLBACK_TY
     handler = _FailureLog(hass, store)
     logger = logging.getLogger(MOBILE_APP_LOGGER)
     logger.addHandler(handler)
-
-    @callback
-    def stop() -> None:
-        handler.active = False
-        logger.removeHandler(handler)
-
-    return stop
+    return lambda: logger.removeHandler(handler)

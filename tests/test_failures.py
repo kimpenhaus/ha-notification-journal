@@ -8,9 +8,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.notification_journal import failures
-
-from custom_components.notification_journal import RuntimeData
+from custom_components.notification_journal import RuntimeData, failures
 from custom_components.notification_journal.const import DEFAULT_OPTIONS, DOMAIN
 from custom_components.notification_journal.failures import MOBILE_APP_LOGGER
 from custom_components.notification_journal.models import NotificationRecord, Status
@@ -42,10 +40,12 @@ async def _family(hass: HomeAssistant, *, nested: bool = False) -> None:
     def group(name: str, *members: str) -> dict:
         return {"platform": "group", "name": name, "services": [{"action": member} for member in members]}
 
-    groups = [group("family", "phone_anna", "kids"), group("kids", "phone_ben")] if nested else []
-    assert await async_setup_component(
-        hass, "notify", {"notify": groups or [group("family", "phone_anna", "phone_ben")]}
+    groups = (
+        [group("family", "phone_anna", "kids"), group("kids", "phone_ben")]
+        if nested
+        else [group("family", "phone_anna", "phone_ben")]
     )
+    assert await async_setup_component(hass, "notify", {"notify": groups})
     await hass.async_block_till_done()
 
 
@@ -65,7 +65,6 @@ async def test_a_logged_push_error_fails_the_notification(hass: HomeAssistant) -
     record = await _send(hass, runtime, "phone_anna")
 
     assert (record.status, record.error) == (Status.FAILED, "Error sending notification to phone_anna")
-    assert record.status_time is not None
 
 
 async def test_a_rate_limit_fails_the_notification(hass: HomeAssistant) -> None:

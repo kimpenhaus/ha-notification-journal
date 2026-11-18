@@ -45,8 +45,6 @@ _group_call: ContextVar[_GroupCall | None] = ContextVar("notification_journal_gr
 
 @dataclass(frozen=True, slots=True)
 class SentCall:
-    """The record a call of a notify action belongs to, and the channel it called."""
-
     record_id: str
     channel: str
 
@@ -113,11 +111,10 @@ class NotifySource:
                         channel=channel,
                         recipients=self._recipients(service, [channel]),
                         context_id=event.context.id,
-                        group=self._group_members(service, [channel]) is not None,
+                        group=self._is_group(service, channel),
                     )
                     self._store.add_inner_call(parent.record_id, call)
-                if len(channels) == 1:
-                    current_call.set(SentCall(parent.record_id, channels[0]))
+                _track(parent.record_id, channels)
             return
 
         members = self._group_members(service, channels)
@@ -127,8 +124,7 @@ class NotifySource:
             record = self._record(event, service, data, channels, group=group)
             self._store.add(record)
             record_id = record.id
-            if len(channels) == 1:
-                current_call.set(SentCall(record_id, channels[0]))
+            _track(record_id, channels)
         if members is not None:
             _group_call.set(
                 _GroupCall(
@@ -180,6 +176,11 @@ class NotifySource:
             return self._resolver.for_entities(channels)
         return self._resolver.for_service(service)
 
+    def _is_group(self, service: str, channel: str) -> bool:
+        if service == SEND_MESSAGE:
+            return entity_group_members(self._hass, channel) is not None
+        return legacy_group_members(self._hass, service) is not None
+
     def _group_members(self, service: str, channels: list[str]) -> list[str] | None:
         """Return every channel a group reaches, nested groups included, or None for no group."""
         if service != SEND_MESSAGE:
@@ -207,6 +208,11 @@ class NotifySource:
             and message == parent.message
             and event.time_fired_timestamp - parent.started < GROUP_CALL_WINDOW
         )
+
+
+def _track(record_id: str, channels: list[str]) -> None:
+    if len(channels) == 1:
+        current_call.set(SentCall(record_id, channels[0]))
 
 
 @callback
