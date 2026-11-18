@@ -55,7 +55,7 @@ const DAY_PAGE_SIZE = 200;
 const ARCHIVE_BATCH = 200;
 const SEARCH_DELAY = 300;
 const PERIODS: Record<Exclude<Period, "">, number> = { day: 1, week: 7, month: 30, quarter: 90 };
-const STATUSES: Status[] = ["sent", "dismissed", "replaced"];
+const STATUSES: Status[] = ["sent", "failed", "partial", "dismissed", "replaced"];
 const DEFAULT_FILTERS: Filters = {
   text: "",
   status: "",

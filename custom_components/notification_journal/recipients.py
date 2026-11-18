@@ -87,6 +87,20 @@ def entity_recipient(hass: HomeAssistant, entity_id: str, kind: RecipientKind) -
     return Recipient(kind=kind, id=entity_id, name=state.name if state else entity_id)
 
 
+def mobile_app_entry(hass: HomeAssistant, service: str) -> ConfigEntry | None:
+    """Return the Companion app's config entry behind a legacy notify action such as mobile_app_phone."""
+    for platform, notify_service in _legacy_services(hass):
+        if platform != MOBILE_APP_DOMAIN:
+            continue
+        webhook_id = getattr(notify_service, "registered_targets", {}).get(service)
+        if webhook_id is None:
+            continue
+        for entry in hass.config_entries.async_entries(MOBILE_APP_DOMAIN):
+            if entry.data.get(ATTR_WEBHOOK_ID) == webhook_id:
+                return entry
+    return None
+
+
 class RecipientResolver:
     """Turn notify actions and notify entities into recipients."""
 
@@ -112,7 +126,7 @@ class RecipientResolver:
         seen.add(service)
         if (members := legacy_group_members(self._hass, service)) is not None:
             return [r for member in members for r in self._service(member, seen, people)]
-        entry = self._mobile_app_entry(service)
+        entry = mobile_app_entry(self._hass, service)
         if entry and entry.data.get(ATTR_USER_ID) in people:
             return [people[entry.data[ATTR_USER_ID]]]
         name = (entry.data.get(ATTR_DEVICE_NAME) if entry else None) or service
@@ -131,18 +145,6 @@ class RecipientResolver:
             if config_entry and config_entry.domain == MOBILE_APP_DOMAIN and user_id in people:
                 return [people[user_id]]
         return [entity_recipient(self._hass, entity_id, RecipientKind.ENTITY)]
-
-    def _mobile_app_entry(self, service: str) -> ConfigEntry | None:
-        for platform, notify_service in _legacy_services(self._hass):
-            if platform != MOBILE_APP_DOMAIN:
-                continue
-            webhook_id = getattr(notify_service, "registered_targets", {}).get(service)
-            if webhook_id is None:
-                continue
-            for entry in self._hass.config_entries.async_entries(MOBILE_APP_DOMAIN):
-                if entry.data.get(ATTR_WEBHOOK_ID) == webhook_id:
-                    return entry
-        return None
 
     @staticmethod
     def _dedupe(recipients: list[Recipient]) -> list[Recipient]:

@@ -289,6 +289,14 @@ def _where(query: Query) -> tuple[str, list[Any]]:
     return (f"WHERE {' AND '.join(where)}" if where else ""), params
 
 
+def _group_status(calls: list[Call]) -> Status | None:
+    """The status of a group from its members that are no groups themselves; None while none of them failed."""
+    errors = [bool(call.error) for call in calls if not call.group]
+    if not any(errors):
+        return None
+    return Status.FAILED if all(errors) else Status.PARTIAL
+
+
 def _fts_query(text: str) -> str | None:
     terms = ['"' + term.replace('"', '""') + '"*' for term in text.split() if any(ch.isalnum() for ch in term)]
     return " AND ".join(terms) or None
@@ -369,6 +377,10 @@ class NotificationStore:
     def add_inner_call(self, record_id: str, call: Call) -> None:
         """Submit a call a group made for one of its members."""
         self._submit(self._append_call, record_id, call, notify=("updated", record_id))
+
+    def mark_failed(self, record_id: str, channel: str, error: str) -> None:
+        """Submit an error of a call: on the record, or on the member of a group, which then failed in part or whole."""
+        self._submit(self._mark_failed, record_id, channel, error, notify=("updated", record_id))
 
     def set_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
         """Submit a change of status, with when and by whom it happened."""
@@ -598,13 +610,36 @@ class NotificationStore:
             before = self._get_by_rowid(db, row[0])
             if before is None:
                 return
+            calls = [*before.inner_calls, call]
+            record = replace(before, inner_calls=calls, status=_group_status(calls) or before.status)
             db.execute(
-                "UPDATE notifications SET inner_calls = json_insert(inner_calls, '$[#]', json(?)) WHERE rowid = ?",
-                (json.dumps(asdict(call)), row[0]),
+                "UPDATE notifications SET inner_calls = json_insert(inner_calls, '$[#]', json(?)), status = ? "
+                "WHERE rowid = ?",
+                (json.dumps(asdict(call)), record.status.value, row[0]),
             )
-            record = replace(before, inner_calls=[*before.inner_calls, call])
             self._index(db, row[0], record)
             self._recount(db, before, record)
+
+    def _mark_failed(self, record_id: str, channel: str, error: str) -> None:
+        db = self._db()
+        if (record := self._get(record_id)) is None:
+            return
+        calls = record.inner_calls
+        if calls:
+            failed = next((c for c in calls if c.channel == channel and c.error is None and not c.group), None)
+            if failed is None:
+                return
+            calls = [replace(c, error=error) if c is failed else c for c in calls]
+            status, record_error = _group_status(calls), None
+        elif record.status is Status.FAILED:
+            return
+        else:
+            status, record_error = Status.FAILED, error
+        with db:
+            db.execute(
+                "UPDATE notifications SET status = ?, error = ?, inner_calls = ? WHERE id = ?",
+                (status.value, record_error, json.dumps([asdict(c) for c in calls]), record_id),
+            )
 
     def _update_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
         db = self._db()

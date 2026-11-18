@@ -8,6 +8,7 @@ import {
   mdiAccountOutline,
   mdiAccountMultipleOutline,
   mdiAlertCircleOutline,
+  mdiAlertOutline,
   mdiBellCheckOutline,
   mdiBellOutline,
   mdiBullhornOutline,
@@ -46,6 +47,7 @@ const STATUS_ICONS: Record<Status, string> = {
   sent: mdiSendCheckOutline,
   delivered: mdiCheckAll,
   failed: mdiAlertCircleOutline,
+  partial: mdiAlertOutline,
   dismissed: mdiBellCheckOutline,
   replaced: mdiSwapHorizontal,
 };
@@ -119,6 +121,10 @@ function personAvatar(name: string, picture: string | null): TemplateResult {
   return picture
     ? html`<img class="avatar" src=${picture} alt="" loading="lazy" />`
     : html`<span class="avatar initials">${initials(name)}</span>`;
+}
+
+function errorLine(text: string, extra = ""): TemplateResult {
+  return html`<p class="error ${extra}">${icon(mdiAlertCircleOutline)}${text}</p>`;
 }
 
 export function recipientChip(recipient: Recipient): TemplateResult {
@@ -246,8 +252,7 @@ export class NotificationJournalRecord extends LitElement {
           </header>
           <div class="indent">
             ${this._message()} ${this._statusNote(statusText)}
-            ${record.error ? html`<p class="error">${icon(mdiAlertCircleOutline)}${record.error}</p>` : nothing}
-            ${this._media()} ${this._buttons()}
+            ${record.error ? errorLine(record.error) : this._failedCalls()} ${this._media()} ${this._buttons()}
             <div class="chips">${this._origin()} ${this._route()} ${this._tag()}</div>
             ${this._calls ? this._innerCalls() : nothing} ${this._details ? this._detailList() : nothing}
           </div>
@@ -635,6 +640,14 @@ export class NotificationJournalRecord extends LitElement {
     </button>`;
   }
 
+  private _failedCalls(): TemplateResult | typeof nothing {
+    const record = this.record;
+    if (record.status !== "failed" && record.status !== "partial") return nothing;
+    const members = record.inner_calls.filter((call) => !call.group);
+    const failed = members.filter((call) => call.error).length;
+    return failed ? errorLine(this.localize("failed_calls", { count: failed, total: members.length })) : nothing;
+  }
+
   private _innerCalls(): TemplateResult {
     const calls = this.record.inner_calls;
     return html`<section class="calls">
@@ -647,6 +660,7 @@ export class NotificationJournalRecord extends LitElement {
               <span class="chips"
                 >${call.recipients.filter((recipient) => recipient.id !== call.channel).map(recipientChip)}</span
               >
+              ${call.error ? errorLine(call.error, "call-error") : nothing}
             </li>`,
         )}
       </ul>
@@ -704,6 +718,9 @@ export class NotificationJournalRecord extends LitElement {
       }
       .card.failed {
         --status-color: var(--error-color);
+      }
+      .card.partial {
+        --status-color: var(--warning-color);
       }
       .card.dismissed,
       .card.replaced {
@@ -822,6 +839,10 @@ export class NotificationJournalRecord extends LitElement {
         -webkit-line-clamp: 4;
         -webkit-box-orient: vertical;
         overflow: hidden;
+      }
+      .error.call-error {
+        flex-basis: 100%;
+        margin: 2px 0 0;
       }
       .error {
         display: flex;

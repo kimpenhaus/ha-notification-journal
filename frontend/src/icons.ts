@@ -5,6 +5,7 @@ export {
   mdiAccountMultipleOutline,
   mdiAccountOutline,
   mdiAlertCircleOutline,
+  mdiAlertOutline,
   mdiArchiveArrowDownOutline,
   mdiArchiveArrowUpOutline,
   mdiArchiveOutline,
