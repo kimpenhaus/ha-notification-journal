@@ -8,6 +8,7 @@ import {
   mdiAccountOutline,
   mdiAccountMultipleOutline,
   mdiAlertCircleOutline,
+  mdiAlertOutline,
   mdiBellCheckOutline,
   mdiBellOutline,
   mdiBullhornOutline,
@@ -46,6 +47,7 @@ const STATUS_ICONS: Record<Status, string> = {
   sent: mdiSendCheckOutline,
   delivered: mdiCheckAll,
   failed: mdiAlertCircleOutline,
+  partial: mdiAlertOutline,
   dismissed: mdiBellCheckOutline,
   replaced: mdiSwapHorizontal,
 };
@@ -481,7 +483,7 @@ export class NotificationJournalRecord extends LitElement {
 
   private _statusNote(statusText: string): TemplateResult | typeof nothing {
     const record = this.record;
-    if (!record.status_time) return nothing;
+    if (!record.status_time || record.status === "failed" || record.status === "partial") return nothing;
     const time = shortDateTimeText(this.clock, record.status_time);
     const name = record.status_by ? this._originName(record.status_by) : undefined;
     const values = { status: statusText, time, name: name ?? "" };
@@ -647,6 +649,7 @@ export class NotificationJournalRecord extends LitElement {
               <span class="chips"
                 >${call.recipients.filter((recipient) => recipient.id !== call.channel).map(recipientChip)}</span
               >
+              ${call.error ? html`<p class="error call-error">${icon(mdiAlertCircleOutline)}${call.error}</p>` : nothing}
             </li>`,
         )}
       </ul>
@@ -704,6 +707,9 @@ export class NotificationJournalRecord extends LitElement {
       }
       .card.failed {
         --status-color: var(--error-color);
+      }
+      .card.partial {
+        --status-color: var(--warning-color);
       }
       .card.dismissed,
       .card.replaced {
@@ -822,6 +828,10 @@ export class NotificationJournalRecord extends LitElement {
         -webkit-line-clamp: 4;
         -webkit-box-orient: vertical;
         overflow: hidden;
+      }
+      .error.call-error {
+        flex-basis: 100%;
+        margin: 2px 0 0;
       }
       .error {
         display: flex;

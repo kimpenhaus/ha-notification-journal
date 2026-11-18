@@ -33,6 +33,7 @@ from .const import (
     SIGNAL_CHANGED,
     Visibility,
 )
+from .failures import watch_failures
 from .importer import async_import
 from .panel import async_register_frontend, async_register_panel, async_remove_panel
 from .recipients import qualify_channel
@@ -178,6 +179,8 @@ def _start(
     _purge()
     stop.append(async_track_time_interval(hass, _purge, PURGE_INTERVAL))
     excluded = {qualify_channel(channel) for channel in options[CONF_EXCLUDED_CHANNELS]}
+    if options[CONF_RECORD_NOTIFY]:
+        stop.append(watch_failures(hass, store))
     sources: list[EventSource] = []
     for option, source in (
         (CONF_RECORD_NOTIFY, NotifySource),

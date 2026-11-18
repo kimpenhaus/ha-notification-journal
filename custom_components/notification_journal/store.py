@@ -370,6 +370,10 @@ class NotificationStore:
         """Submit a call a group made for one of its members."""
         self._submit(self._append_call, record_id, call, notify=("updated", record_id))
 
+    def mark_failed(self, record_id: str, channel: str, error: str, time: datetime) -> None:
+        """Submit an error of a call: on the record, or on the member of a group, which then failed in part or whole."""
+        self._submit(self._mark_failed, record_id, channel, error, time, notify=("updated", record_id))
+
     def set_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
         """Submit a change of status, with when and by whom it happened."""
         self._submit(self._update_status, record_id, status, time, by, notify=("updated", record_id))
@@ -605,6 +609,27 @@ class NotificationStore:
             record = replace(before, inner_calls=[*before.inner_calls, call])
             self._index(db, row[0], record)
             self._recount(db, before, record)
+
+    def _mark_failed(self, record_id: str, channel: str, error: str, time: datetime) -> None:
+        db = self._db()
+        with db:
+            row = db.execute("SELECT rowid FROM notifications WHERE id = ?", (record_id,)).fetchone()
+            record = None if row is None else self._get_by_rowid(db, row[0])
+            if record is None:
+                return
+            calls = record.inner_calls
+            failed = next((c for c in calls if c.channel == channel and c.error is None), None)
+            if failed is not None:
+                calls = [replace(c, error=error) if c is failed else c for c in calls]
+                status = Status.FAILED if all(c.error for c in calls) else Status.PARTIAL
+                error = None if status is Status.PARTIAL else record.error or error
+            else:
+                status = Status.FAILED
+            db.execute(
+                "UPDATE notifications SET status = ?, status_time = ?, status_by = NULL, error = ?, inner_calls = ? "
+                "WHERE rowid = ?",
+                (status.value, time.timestamp(), error, json.dumps([asdict(c) for c in calls]), row[0]),
+            )
 
     def _update_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
         db = self._db()

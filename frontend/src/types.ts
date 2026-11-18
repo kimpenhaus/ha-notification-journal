@@ -1,4 +1,4 @@
-export type Status = "sent" | "delivered" | "failed" | "dismissed" | "replaced";
+export type Status = "sent" | "delivered" | "failed" | "partial" | "dismissed" | "replaced";
 export type RecipientKind = "person" | "entity" | "channel" | "everyone" | "speaker" | "chat";
 export type OriginKind = "automation" | "script" | "user" | "integration" | "system" | "unknown";
 
@@ -33,6 +33,7 @@ export interface Call {
   channel: string;
   recipients: Recipient[];
   context_id: string;
+  error?: string | null;
 }
 
 export interface NotificationRecord {

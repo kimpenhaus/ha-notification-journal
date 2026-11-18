@@ -43,6 +43,18 @@ class _GroupCall:
 _group_call: ContextVar[_GroupCall | None] = ContextVar("notification_journal_group_call", default=None)
 
 
+@dataclass(frozen=True, slots=True)
+class SentCall:
+    """The record a call of a notify action belongs to, and the channel it called."""
+
+    record_id: str
+    channel: str
+
+
+current_call: ContextVar[SentCall | None] = ContextVar("notification_journal_current_call", default=None)
+"""Set while a recorded call runs: the action runs in the same asyncio context, so what it logs belongs to the call."""
+
+
 class NotifySource:
     """Record every call of a notify action, legacy actions and notify entities alike.
 
@@ -85,6 +97,7 @@ class NotifySource:
 
     @callback
     def _handle(self, event: Event) -> None:
+        current_call.set(None)
         service: str = event.data["service"]
         data: dict[str, Any] = dict(event.data.get("service_data") or {})
         channels = self._channels(service, data)
@@ -100,6 +113,8 @@ class NotifySource:
                         channel=channel, recipients=self._recipients(service, [channel]), context_id=event.context.id
                     )
                     self._store.add_inner_call(parent.record_id, call)
+                if len(channels) == 1:
+                    current_call.set(SentCall(parent.record_id, channels[0]))
             return
 
         members = self._group_members(service, channels)
@@ -109,6 +124,8 @@ class NotifySource:
             record = self._record(event, service, data, channels, group=group)
             self._store.add(record)
             record_id = record.id
+            if len(channels) == 1:
+                current_call.set(SentCall(record_id, channels[0]))
         if members is not None:
             _group_call.set(
                 _GroupCall(
