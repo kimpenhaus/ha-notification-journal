@@ -102,6 +102,7 @@ async def test_member_calls_of_a_group_join_its_imported_record(recorder_mock, h
         hass.services.async_register("notify", name, lambda call: None)
     group = {"platform": "group", "name": "family", "services": [{"action": "phone_anna"}, {"action": "phone_ben"}]}
     assert await async_setup_component(hass, "notify", {"notify": [group]})
+    await hass.async_block_till_done()
     await hass.services.async_call("notify", "family", {"message": "Dinner"}, blocking=True)
     await hass.services.async_call("notify", "phone_ben", {"message": "Alone"}, blocking=True)
     await async_wait_recording_done(hass)
