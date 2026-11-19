@@ -85,6 +85,8 @@
             return { records: list.slice(m.offset, m.offset + m.limit), total: list.length, groups, days };
           },
           async subscribeMessage() { return async () => {}; },
+          addEventListener() {},
+          removeEventListener() {},
         },
       };
       await import("./panel.js");

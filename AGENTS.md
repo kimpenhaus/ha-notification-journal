@@ -36,6 +36,7 @@
 - `feat`, `fix` and `perf` end up in the release notes, so they describe what users notice; changes to CI, tooling or docs use `ci`, `chore` or `docs`, even when they repair something.
 - A pull request that resolves an issue has `Closes #<n>` in its description.
 - Do not edit the version in `manifest.json` or `CHANGELOG.md` by hand; release-please does that in its release pull request.
+- Before the release pull request is merged, compare `README.md`, `docs/DEVELOPMENT.md` and the screenshots with everything the release contains (its changelog): every feature is in the README's feature list, and every one users can see is on a screenshot. Close the gaps by pull request first; that each pull request updated the docs does not replace this check.
 - Do not add `Co-Authored-By`, AI attribution, or another author identity to commits, pull requests, issue comments or release notes.
 
 ## Security

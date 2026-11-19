@@ -73,6 +73,12 @@ const byOrigin = async (page) => {
   await page.getByRole("button", { name: "Collapse all" }).click();
   await page.locator("button.section.group").nth(1).click();
 };
+const partlyFailed = async (page) => {
+  await page.locator("select:has(option[value=partial])").selectOption("partial");
+  await page.waitForSelector("notification-journal-record");
+  await page.waitForTimeout(300);
+  await page.locator("button.chip.group").first().click();
+};
 const statistics = async (page) => {
   await page.locator('button[title="Statistics"]').click();
   await page.waitForSelector("notification-journal-statistics .stats");
@@ -87,11 +93,12 @@ for (const theme of ["light", "dark"]) {
   const query = `lang=en&theme=${theme}`;
   await shot(`timeline-${theme}`, query, { width: 1280, height: 1250 }, group);
   await shot(`automations-${theme}`, query, { width: 1280, height: 1100 }, byOrigin);
+  await shot(`failed-${theme}`, query, { width: 1280, height: 900 }, partlyFailed);
   await shot(`statistics-${theme}`, query, { width: 1280, height: 1400 }, statistics, statisticsEnd);
   await shot(`mobile-${theme}`, `${query}&narrow=1`, { width: 390, height: 844 }, async () => {}, null);
 
   await frame(`hero-nordic-${theme}`, `theme=${theme}&layout=hero&a=timeline-${theme}&b=mobile-${theme}`);
-  for (const view of ["timeline", "automations", "statistics"]) {
+  for (const view of ["timeline", "automations", "failed", "statistics"]) {
     await frame(`${view}-nordic-${theme}`, `theme=${theme}&layout=window&a=${view}-${theme}`);
   }
 }
