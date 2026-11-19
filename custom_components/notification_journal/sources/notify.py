@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
@@ -19,7 +21,7 @@ from ..recipients import (
     legacy_group_members,
 )
 from ..store import NotificationStore
-from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, Listener, as_list, new_record, resent_from
+from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, Listener, as_list, new_record
 
 GROUP_CALL_WINDOW = 5.0
 EVENT_NOTIFICATION_ACTION = "mobile_app_notification_action"
@@ -38,11 +40,31 @@ class _GroupCall:
     started: float
     entity_group: bool
     """A notify group entity calls its members in its own context, a legacy group in a new one."""
-    resent_from: str | None
-    """Set when the panel sends the group again: its member calls then belong to that sending only."""
 
 
 _group_call: ContextVar[_GroupCall | None] = ContextVar("notification_journal_group_call", default=None)
+
+
+@dataclass(slots=True)
+class Resend:
+    """A failed notification sent again in a call's context, and the record that call made."""
+
+    record_id: str
+    sent: str | None = None
+
+
+_resends: dict[str, Resend] = {}
+
+
+@contextmanager
+def resend(context_id: str, record_id: str) -> Iterator[Resend]:
+    """Record the call made in a context as sending a failed notification again, apart from any group call before."""
+    _group_call.set(None)
+    _resends[context_id] = entry = Resend(record_id)
+    try:
+        yield entry
+    finally:
+        _resends.pop(context_id, None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +146,8 @@ class NotifySource:
         if not excluded:
             group = channels[0] if members is not None else None
             record = self._record(event, service, data, channels, group=group)
+            if (resend := _resends.get(event.context.id)) is not None:
+                record.resent_from, resend.sent = resend.record_id, record.id
             self._store.add(record)
             record_id = record.id
             _track(record_id, channels)
@@ -136,7 +160,6 @@ class NotifySource:
                     message=message,
                     started=event.time_fired_timestamp,
                     entity_group=service == SEND_MESSAGE,
-                    resent_from=resent_from(),
                 )
             )
 
@@ -210,7 +233,6 @@ class NotifySource:
             and parent.members.issuperset(channels)
             and message == parent.message
             and event.time_fired_timestamp - parent.started < GROUP_CALL_WINDOW
-            and parent.resent_from == resent_from()
         )
 
 

@@ -125,6 +125,14 @@ function personAvatar(name: string, picture: string | null): TemplateResult {
     : html`<span class="avatar initials">${initials(name)}</span>`;
 }
 
+function statusNote(text: string): TemplateResult {
+  return html`<p class="status-note">${text}</p>`;
+}
+
+function failed(record: NotificationRecord): boolean {
+  return record.status === "failed" || record.status === "partial";
+}
+
 function errorLine(text: string, extra = ""): TemplateResult {
   return html`<p class="error ${extra}">${icon(mdiAlertCircleOutline)}${text}</p>`;
 }
@@ -166,9 +174,7 @@ export class NotificationJournalRecord extends LitElement {
     _sources: { state: true },
     sign: { attribute: false },
     resend: { attribute: false },
-    _resending: { state: true },
-    _resendError: { state: true },
-    _sentAgain: { state: true },
+    _resend: { state: true },
     selectable: { type: Boolean },
     selected: { type: Boolean },
   };
@@ -190,9 +196,7 @@ export class NotificationJournalRecord extends LitElement {
   declare sign: Signer | undefined;
   /** Sends a failed notification again; only given to administrators. */
   declare resend: ((recordId: string) => Promise<unknown>) | undefined;
-  declare _resending: boolean;
-  declare _resendError: string | undefined;
-  declare _sentAgain: boolean;
+  declare _resend: "sending" | "sent" | { error: string } | undefined;
   private _found: Media = {};
   private _frame: Element | undefined;
   declare selectable: boolean;
@@ -208,8 +212,6 @@ export class NotificationJournalRecord extends LitElement {
     this._calls = false;
     this._playing = false;
     this._viewing = false;
-    this._resending = false;
-    this._sentAgain = false;
     this._failed = new Set();
     this._sources = new Map();
     this.selectable = false;
@@ -265,8 +267,9 @@ export class NotificationJournalRecord extends LitElement {
           </header>
           <div class="indent">
             ${this._message()} ${this._statusNote(statusText)}
-            ${record.error ? errorLine(record.error) : this._failedCalls()} ${this._sendAgain()} ${this._media()}
-            ${this._buttons()}
+            ${record.error ? errorLine(record.error) : this._failedCalls()}
+            ${record.resent_from ? statusNote(this.localize("resent_note")) : nothing} ${this._sendAgain()}
+            ${this._media()} ${this._buttons()}
             <div class="chips">${this._origin()} ${this._route()} ${this._tag()}</div>
             ${this._calls ? this._innerCalls() : nothing} ${this._details ? this._detailList() : nothing}
           </div>
@@ -505,7 +508,7 @@ export class NotificationJournalRecord extends LitElement {
     const name = record.status_by ? this._originName(record.status_by) : undefined;
     const values = { status: statusText, time, name: name ?? "" };
     const text = this.localize(name ? "status_note_by" : "status_note", values);
-    return html`<p class="status-note">${text}</p>`;
+    return statusNote(text);
   }
 
   private _message(): TemplateResult | typeof nothing {
@@ -655,40 +658,31 @@ export class NotificationJournalRecord extends LitElement {
   }
 
   private _sendAgain(): TemplateResult | typeof nothing {
-    const record = this.record;
-    const resend = this.resend;
-    const note = record.resent_from ? html`<p class="status-note">${this.localize("resent_note")}</p>` : nothing;
-    if (!resend || record.source !== "notify" || (record.status !== "failed" && record.status !== "partial")) {
-      return note;
-    }
-    if (this._sentAgain)
-      return html`${note}
-        <p class="status-note">${this.localize("resent_done")}</p>`;
-    const send = async () => {
-      this._resending = true;
-      this._resendError = undefined;
-      try {
-        await resend(record.id);
-        this._sentAgain = true;
-      } catch (error) {
-        this._resendError = this.localize("resend_failed", { message: errorMessage(error) });
-      } finally {
-        this._resending = false;
-      }
-    };
-    return html`${note}
-      <button class="resend" ?disabled=${this._resending} @click=${send}>
-        ${icon(mdiReplay)}${this.localize(this._resending ? "resending" : "resend")}
+    const state = this._resend;
+    if (!this.resend || this.record.source !== "notify" || !failed(this.record)) return nothing;
+    if (state === "sent") return statusNote(this.localize("resent_done"));
+    return html`<button class="button resend" ?disabled=${state === "sending"} @click=${this._sendAgainNow}>
+        ${icon(mdiReplay)}${this.localize(state === "sending" ? "resending" : "resend")}
       </button>
-      ${this._resendError ? errorLine(this._resendError) : nothing}`;
+      ${typeof state === "object" ? errorLine(state.error) : nothing}`;
   }
+
+  private readonly _sendAgainNow = async (): Promise<void> => {
+    this._resend = "sending";
+    try {
+      await this.resend!(this.record.id);
+      this._resend = "sent";
+    } catch (error) {
+      this._resend = { error: this.localize("resend_failed", { message: errorMessage(error) }) };
+    }
+  };
 
   private _failedCalls(): TemplateResult | typeof nothing {
     const record = this.record;
-    if (record.status !== "failed" && record.status !== "partial") return nothing;
+    if (!failed(record)) return nothing;
     const members = record.inner_calls.filter((call) => !call.group);
-    const failed = members.filter((call) => call.error).length;
-    return failed ? errorLine(this.localize("failed_calls", { count: failed, total: members.length })) : nothing;
+    const count = members.filter((call) => call.error).length;
+    return count ? errorLine(this.localize("failed_calls", { count, total: members.length })) : nothing;
   }
 
   private _innerCalls(): TemplateResult {
@@ -1267,18 +1261,11 @@ export class NotificationJournalRecord extends LitElement {
         color: var(--primary-text-color);
         background: var(--card-background-color);
       }
-      .resend {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
+      .button.resend {
         margin: 6px 0 0;
-        padding: 4px 8px 4px 6px;
-        border: 1px solid var(--divider-color);
-        border-radius: 6px;
         background: none;
         color: var(--primary-color);
-        font: inherit;
-        font-size: 0.85rem;
+        font-family: inherit;
         cursor: pointer;
       }
       .resend .icon {

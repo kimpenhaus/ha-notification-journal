@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from contextvars import ContextVar
-from dataclasses import dataclass
 from typing import Any, Protocol
 
 from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID, ATTR_FLOOR_ID, ATTR_LABEL_ID
@@ -43,24 +41,6 @@ def plain(data: dict[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(data, default=str))
 
 
-@dataclass(slots=True)
-class Resending:
-    """A failed notification the panel sends again; active only while its own calls run."""
-
-    record_id: str
-    active: bool = True
-
-
-resending: ContextVar[Resending | None] = ContextVar("notification_journal_resending", default=None)
-"""Set while the panel sends a failed notification again; tasks started meanwhile inherit it, hence `active`."""
-
-
-def resent_from() -> str | None:
-    """The notification being sent again right now, if any."""
-    mark = resending.get()
-    return mark.record_id if mark is not None and mark.active else None
-
-
 def new_record(
     hass: HomeAssistant, event: Event, *, data: dict[str, Any] | None = None, **fields: Any
 ) -> NotificationRecord:
@@ -75,6 +55,5 @@ def new_record(
         data=plain(data) if data else None,
         origin=resolve_origin(hass, event.context),
         context_id=event.context.id,
-        resent_from=resent_from(),
         **fields,
     )

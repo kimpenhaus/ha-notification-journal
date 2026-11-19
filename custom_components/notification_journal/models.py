@@ -120,7 +120,6 @@ class NotificationRecord:
     status_by: Origin | None = None
     answers: list[Answer] = field(default_factory=list)
     resent_from: str | None = None
-    """The failed notification this one sends again, by hand from the panel."""
 
     @property
     def all_recipients(self) -> list[Recipient]:

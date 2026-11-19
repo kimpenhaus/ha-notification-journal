@@ -58,18 +58,23 @@ def _legacy_services(hass: HomeAssistant) -> Iterable[tuple[str, Any]]:
             yield platform, service
 
 
-def legacy_group_members(hass: HomeAssistant, service: str) -> list[str] | None:
-    """Return the member actions of a legacy notify group, or None if the action is no group."""
+def _legacy_group_entries(hass: HomeAssistant, service: str) -> list[tuple[str, dict[str, Any]]] | None:
+    """Return the members of a legacy notify group with their configuration, or None if the action is no group."""
     for platform, notify_service in _legacy_services(hass):
         if platform != GROUP_PLATFORM or getattr(notify_service, "_service_name", None) != service:
             continue
-        members = []
-        for member in getattr(notify_service, "entities", []):
-            name = next((member[key] for key in GROUP_MEMBER_KEYS if key in member), None)
-            if name:
-                members.append(name)
-        return members
+        entries = []
+        for entry in getattr(notify_service, "entities", []):
+            if name := next((entry[key] for key in GROUP_MEMBER_KEYS if key in entry), None):
+                entries.append((name, entry))
+        return entries
     return None
+
+
+def legacy_group_members(hass: HomeAssistant, service: str) -> list[str] | None:
+    """Return the member actions of a legacy notify group, or None if the action is no group."""
+    entries = _legacy_group_entries(hass, service)
+    return None if entries is None else [name for name, _ in entries]
 
 
 def member_defaults(
@@ -79,16 +84,12 @@ def member_defaults(
     the outer group first; empty when the member is not in the group."""
     if group in seen:
         return []
-    for platform, notify_service in _legacy_services(hass):
-        if platform != GROUP_PLATFORM or getattr(notify_service, "_service_name", None) != group:
-            continue
-        for entry in getattr(notify_service, "entities", []):
-            name = next((entry[key] for key in GROUP_MEMBER_KEYS if key in entry), None)
-            own = [entry["data"]] if isinstance(entry.get("data"), dict) else []
-            if name == member:
-                return own
-            if name and (inner := member_defaults(hass, name, member, seen | {group})):
-                return own + inner
+    for name, entry in _legacy_group_entries(hass, group) or []:
+        own = [entry["data"]] if isinstance(entry.get("data"), dict) else []
+        if name == member:
+            return own
+        if inner := member_defaults(hass, name, member, seen | {group}):
+            return own + inner
     return []
 
 
