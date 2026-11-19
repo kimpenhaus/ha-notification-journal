@@ -1,0 +1,13 @@
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Something that does not work as described, or an idea, belongs in the [issues](https://github.com/kimpenhaus/ha-notification-journal/issues/new/choose).
+        Please leave out personal data such as names, addresses and the texts of real notifications; replace them with made-up ones.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What you want to do or understand, what you tried, and your Home Assistant and Notification Journal versions.
+    validations:
+      required: true

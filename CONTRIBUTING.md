@@ -2,6 +2,7 @@
 
 Thanks for helping to improve Notification Journal!
 
+- **Questions and help with setup:** ask in the [discussions](https://github.com/kimpenhaus/ha-notification-journal/discussions/categories/q-a).
 - **Bugs & ideas:** open an [issue](https://github.com/kimpenhaus/ha-notification-journal/issues/new/choose).
 - **Security issues:** see [SECURITY.md](SECURITY.md) – please report privately.
 

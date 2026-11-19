@@ -145,7 +145,7 @@ Who notifies how much and when, compared with the period before.
 
 ## Contributing
 
-Bug reports and ideas are welcome as [issues](https://github.com/kimpenhaus/ha-notification-journal/issues); how to propose a change: [CONTRIBUTING.md](CONTRIBUTING.md). How the integration is built, tested and released: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Questions and help with setup are welcome in the [discussions](https://github.com/kimpenhaus/ha-notification-journal/discussions/categories/q-a), bug reports and ideas as [issues](https://github.com/kimpenhaus/ha-notification-journal/issues); how to propose a change: [CONTRIBUTING.md](CONTRIBUTING.md). How the integration is built, tested and released: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## How this project was made
 
