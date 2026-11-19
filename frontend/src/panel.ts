@@ -38,6 +38,7 @@ import type {
   Day,
   Facets,
   Filters,
+  HassConnection,
   HomeAssistant,
   NotificationRecord,
   Page,
@@ -54,6 +55,7 @@ const PAGE_SIZE = 50;
 const DAY_PAGE_SIZE = 200;
 const ARCHIVE_BATCH = 200;
 const SEARCH_DELAY = 300;
+const SUBSCRIBE_RETRY = 5000;
 const PERIODS: Record<Exclude<Period, "">, number> = { day: 1, week: 7, month: 30, quarter: 90 };
 const STATUSES: Status[] = ["sent", "failed", "partial", "dismissed", "replaced"];
 const DEFAULT_FILTERS: Filters = {
@@ -150,6 +152,8 @@ export class NotificationJournalPanel extends LitElement {
   private _hass?: HomeAssistant;
   private _request = 0;
   private _unsubscribe?: Promise<() => Promise<void>>;
+  private _connection?: HassConnection;
+  private _subscribeTimer?: number;
   private _searchTimer?: number;
   private _facetsTimer?: number;
   private _daysTimer?: number;
@@ -185,8 +189,12 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private readonly _sign: Signer = (path) => signPath(this._hass!.connection, path);
-  /** What was sent while the connection was down never arrived. */
-  private readonly _reconnected = () => this._received({ change: "reload", record_id: "" });
+  /** The subscription ended with the old connection, and what was sent meanwhile never arrived. */
+  private readonly _reconnected = () => {
+    this._unsubscribe = undefined;
+    this._start();
+    if (this._screen === "statistics") void this._statistics?.refresh();
+  };
   private readonly _resend = (recordId: string) =>
     this._hass!.connection.sendMessagePromise({ type: "notification_journal/resend", record_id: recordId });
 
@@ -238,23 +246,37 @@ export class NotificationJournalPanel extends LitElement {
     return Boolean(this._hass?.user?.is_admin);
   }
 
+  /** Subscribes and loads; a subscription refused, as while Home Assistant starts, is tried again. */
   private _start(): void {
-    if (this._unsubscribe) return;
-    const connection = this._hass!.connection;
-    this._unsubscribe = connection.subscribeMessage<RecordEvent>((event) => this._received(event), {
-      type: "notification_journal/subscribe",
+    if (this._unsubscribe || !this._hass) return;
+    window.clearTimeout(this._subscribeTimer);
+    const connection = this._hass.connection;
+    if (this._connection !== connection) {
+      this._connection?.removeEventListener("ready", this._reconnected);
+      connection.addEventListener("ready", this._reconnected);
+      this._connection = connection;
+    }
+    const subscription = connection.subscribeMessage<RecordEvent>(
+      (event) => this._received(event),
+      { type: "notification_journal/subscribe" },
+      { resubscribe: false },
+    );
+    this._unsubscribe = subscription;
+    subscription.catch(() => {
+      if (this._unsubscribe !== subscription) return;
+      this._unsubscribe = undefined;
+      this._subscribeTimer = window.setTimeout(() => this._start(), SUBSCRIBE_RETRY);
     });
-    this._unsubscribe.catch(() => (this._unsubscribe = undefined));
-    connection.addEventListener("ready", this._reconnected);
-    void this._load();
-    void this._loadFacets();
+    this._refresh();
   }
 
   private _stop(): void {
     const unsubscribe = this._unsubscribe;
     this._unsubscribe = undefined;
     unsubscribe?.then((stop) => stop()).catch(() => undefined);
-    this._hass?.connection.removeEventListener("ready", this._reconnected);
+    this._connection?.removeEventListener("ready", this._reconnected);
+    this._connection = undefined;
+    window.clearTimeout(this._subscribeTimer);
     this._observer?.disconnect();
     this._observer = undefined;
     window.clearTimeout(this._searchTimer);
@@ -339,8 +361,7 @@ export class NotificationJournalPanel extends LitElement {
       return;
     }
     if (event.change === "reload") {
-      void this._load();
-      void this._loadFacets();
+      this._refresh();
       return;
     }
     const { change, record } = event;
