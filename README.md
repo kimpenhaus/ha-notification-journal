@@ -17,7 +17,7 @@ Home Assistant forgets a notification the moment it is sent. Notification Journa
   - spoken announcements with text: `tts.speak` on media players and `assist_satellite.announce` on voice satellites
   - Telegram: messages, captioned photos, videos and files, and polls sent with the Telegram bot's own actions, named after the chats
 - **Shows the answers**: the buttons of an actionable notification in the Companion app, which one was tapped, by whom and when, and the text typed into a reply button. Everyone sees their own answers; administrators see all.
-- **Shows what failed**: a notification whose sending failed, with Home Assistant's error, and a group that failed in part, with the error at each member that failed; read from automation and script traces and from what the Companion app logs. Administrators send it again to what failed with one click.
+- **Shows what failed**: a notification whose sending failed, with Home Assistant's error, and a group that failed in part, with the error at each member that failed. Administrators send it again to what failed with one click.
 - **Shows the media**: an image sent with a notification as a preview that opens in an overlay, a video with its image or first frame as a preview that plays in the card, audio as a link. Images that are gone fall back to a link.
 - **Tags**: the Companion app's tag of a notification as a chip; a click shows all notifications with that tag.
 - **Shows who it reached**: notify groups are resolved into the people and devices behind them; a person's current name and picture are shown, and automations, scripts and integrations appear under their current name.

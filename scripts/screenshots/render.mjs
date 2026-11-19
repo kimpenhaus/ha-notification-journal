@@ -75,9 +75,8 @@ const byOrigin = async (page) => {
 };
 const partlyFailed = async (page) => {
   await page.locator("select:has(option[value=partial])").selectOption("partial");
-  await page.waitForSelector("notification-journal-record");
-  await page.waitForTimeout(300);
-  await page.locator("button.chip.group").first().click();
+  await page.locator("notification-journal-record").nth(1).waitFor({ state: "detached" });
+  await group(page);
 };
 const statistics = async (page) => {
   await page.locator('button[title="Statistics"]').click();
