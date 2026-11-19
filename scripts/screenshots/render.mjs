@@ -53,7 +53,7 @@ async function shot(name, query, viewport, actions = async () => {}, bottom = la
   await page.close();
 }
 
-// Sharp enough for the README's retina display, and quantised to a palette to keep the repository small.
+// Quantised to a palette to keep the repository small; the default scale is sharp enough for the README's retina display.
 async function frame(name, query, deviceScaleFactor = 1.25) {
   const page = await browser.newPage({ viewport: { width: 1800, height: 1400 }, deviceScaleFactor });
   watch(page, name);
