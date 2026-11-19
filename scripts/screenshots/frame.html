@@ -36,6 +36,18 @@
       .phone img { border-radius: 41px; }
       .hero .phone { position: absolute; right: 48px; bottom: 40px; }
       .hero .window { margin-right: 300px; }
+      /* The repository's social preview: 1280 × 640, opaque, the name beside a scaled-down hero. */
+      #stage.social {
+        display: block; width: 1280px; height: 640px; padding: 0; overflow: hidden;
+        background: #e5e9f0; color: #2e3440;
+      }
+      .copy { position: absolute; left: 64px; top: 0; bottom: 0; width: 400px; display: flex; flex-direction: column; justify-content: center; }
+      .copy img { width: 96px; height: 96px; margin-bottom: 28px; }
+      .copy h1 { margin: 0 0 20px; font-size: 52px; font-weight: 500; line-height: 1.1; letter-spacing: -0.5px; }
+      .copy p { margin: 0; font-size: 25px; line-height: 1.4; color: #4c566a; }
+      .copy small { margin-top: 32px; font-size: 18px; color: #5e81ac; font-weight: 500; }
+      .scaled { position: absolute; left: 510px; top: 72px; transform: scale(0.55); transform-origin: top left; }
+      .scaled .phone { position: absolute; left: 880px; top: 110px; }
     </style>
   </head>
   <body>
@@ -68,7 +80,21 @@
         return frame;
       };
       const layout = params.get("layout");
-      stage.append(await browser(params.get("a")));
+      if (layout === "social") {
+        stage.classList.add("social");
+        const copy = document.createElement("div");
+        copy.className = "copy";
+        copy.innerHTML =
+          '<img src="icon.png" alt="" /><h1>Notification Journal</h1>' +
+          "<p>Every notification your home sends: who got it, who answered, what failed. Searchable.</p>" +
+          "<small>Home Assistant integration · Marketplace</small>";
+        const scaled = document.createElement("div");
+        scaled.className = "scaled";
+        scaled.append(await browser(params.get("a")), await phone(params.get("b")));
+        stage.append(copy, scaled);
+      } else {
+        stage.append(await browser(params.get("a")));
+      }
       if (layout === "hero") {
         stage.classList.add("hero");
         stage.append(await phone(params.get("b")));

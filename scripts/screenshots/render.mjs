@@ -54,8 +54,8 @@ async function shot(name, query, viewport, actions = async () => {}, bottom = la
 }
 
 // Sharp enough for the README's retina display, and quantised to a palette to keep the repository small.
-async function frame(name, query) {
-  const page = await browser.newPage({ viewport: { width: 1800, height: 1400 }, deviceScaleFactor: 1.25 });
+async function frame(name, query, deviceScaleFactor = 1.25) {
+  const page = await browser.newPage({ viewport: { width: 1800, height: 1400 }, deviceScaleFactor });
   watch(page, name);
   await page.goto(`http://localhost:8080/frame.html?${query}`);
   await page.waitForSelector("body[data-ready]");
@@ -101,6 +101,8 @@ for (const theme of ["light", "dark"]) {
     await frame(`${view}-nordic-${theme}`, `theme=${theme}&layout=window&a=${view}-${theme}`);
   }
 }
+// GitHub shows the social preview at 1280 × 640 and takes it only by hand, under Settings → General.
+await frame("social-preview-nordic-light", "theme=light&layout=social&a=timeline-light&b=mobile-light", 1);
 console.log(errors.length ? errors.join("\n") : "no console errors");
 await browser.close();
 server.close();
