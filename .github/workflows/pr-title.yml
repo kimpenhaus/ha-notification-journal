@@ -50,4 +50,4 @@ jobs:
             deps
           # A digit for release-please's "chore(release): 0.5.0".
           subjectPattern: ^[a-z0-9].*[^.]$
-          subjectPatternError: The summary "{subject}" must start with a lowercase letter and must not end with a period.
+          subjectPatternError: The summary "{subject}" must start with a lowercase letter or a digit and must not end with a period.
