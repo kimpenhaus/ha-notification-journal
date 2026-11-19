@@ -8,10 +8,12 @@
       html, body { margin: 0; background: transparent; font-family: Roboto, sans-serif; }
       body {
         --chrome: #e5e9f0; --chrome-edge: #d8dee9; --address: #eceff4; --address-text: #4c566a;
+        --text: #2e3440; --accent: #5e81ac;
         --shadow: 0 28px 60px -18px rgba(46, 52, 64, 0.45), 0 0 0 1px rgba(46, 52, 64, 0.12);
       }
       body.dark {
         --chrome: #242933; --chrome-edge: #1d2129; --address: #2e3440; --address-text: #d8dee9;
+        --text: #eceff4; --accent: #88c0d0;
         --shadow: 0 28px 60px -18px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(0, 0, 0, 0.5);
       }
       #stage { display: inline-block; position: relative; padding: 40px 48px 64px; }
@@ -34,8 +36,20 @@
         padding: 11px; border-radius: 52px; background: #1d2129; box-shadow: var(--shadow), inset 0 0 0 2px #4c566a;
       }
       .phone img { border-radius: 41px; }
-      .hero .phone { position: absolute; right: 48px; bottom: 40px; }
+      .hero { position: relative; }
       .hero .window { margin-right: 300px; }
+      .hero .phone { position: absolute; right: 0; bottom: -24px; }
+      /* The repository's social preview: the name beside the hero, scaled to fit. */
+      #stage.social {
+        display: block; width: 1280px; height: 640px; padding: 0; overflow: hidden;
+        background: var(--chrome); color: var(--text);
+      }
+      .social .hero { position: absolute; transform-origin: top left; }
+      .copy { position: absolute; left: 64px; top: 0; bottom: 0; width: 400px; display: flex; flex-direction: column; justify-content: center; }
+      .copy img { width: 96px; height: 96px; margin-bottom: 28px; }
+      .copy h1 { margin: 0 0 20px; font-size: 52px; font-weight: 500; line-height: 1.1; letter-spacing: -0.5px; }
+      .copy p { margin: 0; font-size: 25px; line-height: 1.4; color: var(--address-text); }
+      .copy small { margin-top: 32px; font-size: 18px; color: var(--accent); font-weight: 500; }
     </style>
   </head>
   <body>
@@ -67,11 +81,38 @@
         frame.append(await image(name));
         return frame;
       };
-      const layout = params.get("layout");
-      stage.append(await browser(params.get("a")));
-      if (layout === "hero") {
-        stage.classList.add("hero");
-        stage.append(await phone(params.get("b")));
+      const hero = async (a, b) => {
+        const pair = document.createElement("div");
+        pair.className = "hero";
+        pair.append(await browser(a), await phone(b));
+        return pair;
+      };
+      /** Scales the hero into the area right of the copy, keeping the stage's margins. */
+      const fit = (element, { left, top, right, bottom }) => {
+        const box = element.getBoundingClientRect();
+        const height = Math.max(...[...element.children].map((child) => child.getBoundingClientRect().bottom)) - box.top;
+        const scale = Math.min((right - left) / box.width, (bottom - top) / height);
+        element.style.transform = `scale(${scale})`;
+        element.style.left = `${right - box.width * scale}px`;
+        element.style.top = `${(top + bottom - height * scale) / 2}px`;
+      };
+      const [layout, a, b] = ["layout", "a", "b"].map((key) => params.get(key));
+      stage.classList.add(layout);
+      if (layout === "window") {
+        stage.append(await browser(a));
+      } else if (layout === "hero") {
+        stage.append(await hero(a, b));
+      } else if (layout === "social") {
+        const copy = document.createElement("div");
+        copy.className = "copy";
+        copy.innerHTML =
+          '<img src="icon.png" alt="" /><h1>Notification Journal</h1>' +
+          "<p>Every notification your home sends: who got it, who answered, what failed. Searchable.</p>" +
+          "<small>Home Assistant integration · Marketplace</small>";
+        await copy.querySelector("img").decode();
+        const pair = await hero(a, b);
+        stage.append(copy, pair);
+        fit(pair, { left: 528, top: 40, right: 1232, bottom: 600 });
       }
       await document.fonts.ready;
       document.body.dataset.ready = "1";
