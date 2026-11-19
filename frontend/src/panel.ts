@@ -185,6 +185,8 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private readonly _sign: Signer = (path) => signPath(this._hass!.connection, path);
+  /** What was sent while the connection was down never arrived. */
+  private readonly _reconnected = () => this._received({ change: "reload", record_id: "" });
   private readonly _resend = (recordId: string) =>
     this._hass!.connection.sendMessagePromise({ type: "notification_journal/resend", record_id: recordId });
 
@@ -243,6 +245,7 @@ export class NotificationJournalPanel extends LitElement {
       type: "notification_journal/subscribe",
     });
     this._unsubscribe.catch(() => (this._unsubscribe = undefined));
+    connection.addEventListener("ready", this._reconnected);
     void this._load();
     void this._loadFacets();
   }
@@ -251,6 +254,7 @@ export class NotificationJournalPanel extends LitElement {
     const unsubscribe = this._unsubscribe;
     this._unsubscribe = undefined;
     unsubscribe?.then((stop) => stop()).catch(() => undefined);
+    this._hass?.connection.removeEventListener("ready", this._reconnected);
     this._observer?.disconnect();
     this._observer = undefined;
     window.clearTimeout(this._searchTimer);
