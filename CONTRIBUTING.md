@@ -9,8 +9,11 @@ Thanks for helping to improve Notification Journal!
 
 1. Fork the repository and create a branch from `main`.
 2. Title the pull request as a [Conventional Commit](https://www.conventionalcommits.org/) with a scope from
-   `.github/workflows/pr-title.yml` (`fix(panel): …`): it becomes the commit message and the changelog entry,
-   and a check enforces it.
+   `.github/workflows/pr-title.yml` (`fix(panel): …`) and a summary starting with a lowercase letter, without a
+   final period: it becomes the commit message and the changelog entry, and a check enforces it.
+   Repairs to CI, tests, tooling or docs use `ci`, `test`, `chore` or `docs` with the scope of the part they
+   concern (`test(store): …`), never `fix`, so they stay out of the changelog. A revert made with GitHub's
+   button is renamed to `revert(<scope>): …`.
 3. Keep changes focused – one topic per pull request.
 4. Work through the checklist of the pull request template; the commands are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#commands).
 
