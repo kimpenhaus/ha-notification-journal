@@ -185,6 +185,8 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private readonly _sign: Signer = (path) => signPath(this._hass!.connection, path);
+  private readonly _resend = (recordId: string) =>
+    this._hass!.connection.sendMessagePromise({ type: "notification_journal/resend", record_id: recordId });
 
   get hass(): HomeAssistant | undefined {
     return this._hass;
@@ -1094,6 +1096,7 @@ export class NotificationJournalPanel extends LitElement {
                       .userNames=${userNames}
                       .originIcons=${originIcons}
                       .sign=${this._sign}
+                      .resend=${admin ? this._resend : undefined}
                       ?admin=${admin}
                       ?showDate=${byOrigin}
                       ?selectable=${this._selecting}

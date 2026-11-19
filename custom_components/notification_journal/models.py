@@ -119,6 +119,7 @@ class NotificationRecord:
     status_time: datetime | None = None
     status_by: Origin | None = None
     answers: list[Answer] = field(default_factory=list)
+    resent_from: str | None = None
 
     @property
     def all_recipients(self) -> list[Recipient]:

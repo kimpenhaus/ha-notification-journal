@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
@@ -41,6 +43,28 @@ class _GroupCall:
 
 
 _group_call: ContextVar[_GroupCall | None] = ContextVar("notification_journal_group_call", default=None)
+
+
+@dataclass(slots=True)
+class Resend:
+    """A failed notification sent again in a call's context, and the record that call made."""
+
+    record_id: str
+    sent: str | None = None
+
+
+_resends: dict[str, Resend] = {}
+
+
+@contextmanager
+def resend(context_id: str, record_id: str) -> Iterator[Resend]:
+    """Record the call made in a context as sending a failed notification again, apart from any group call before."""
+    _group_call.set(None)
+    _resends[context_id] = entry = Resend(record_id)
+    try:
+        yield entry
+    finally:
+        _resends.pop(context_id, None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +146,8 @@ class NotifySource:
         if not excluded:
             group = channels[0] if members is not None else None
             record = self._record(event, service, data, channels, group=group)
+            if (resend := _resends.get(event.context.id)) is not None:
+                record.resent_from, resend.sent = resend.record_id, record.id
             self._store.add(record)
             record_id = record.id
             _track(record_id, channels)

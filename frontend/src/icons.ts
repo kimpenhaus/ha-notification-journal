@@ -39,6 +39,7 @@ export {
   mdiPlay,
   mdiPuzzleOutline,
   mdiRefresh,
+  mdiReplay,
   mdiRobotOutline,
   mdiScriptTextOutline,
   mdiSelectAll,

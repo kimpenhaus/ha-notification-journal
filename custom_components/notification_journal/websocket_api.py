@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date, datetime, time, timedelta, tzinfo
 from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
+from homeassistant.components.group.notify import add_defaults
+from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.util import dt as dt_util
@@ -15,7 +19,10 @@ from homeassistant.util import dt as dt_util
 from .const import CONF_NON_ADMIN_VISIBILITY, DEFAULT_OPTIONS, DOMAIN, SIGNAL_CHANGED, Visibility
 from .models import NotificationRecord, RecipientKind, Status
 from .origin import OriginNames, origin_key
-from .statistics import PERIOD_KINDS, period, summarize
+from .recipients import NOTIFY_DOMAIN, SEND_MESSAGE, member_defaults
+from .sources import ATTR_MESSAGE, ATTR_TITLE
+from .sources.notify import resend
+from .statistics import FAILED, PERIOD_KINDS, period, summarize
 from .store import NotificationStore, Query
 
 MAX_LIMIT = 200
@@ -34,6 +41,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_subscribe)
     websocket_api.async_register_command(hass, ws_delete)
     websocket_api.async_register_command(hass, ws_archive)
+    websocket_api.async_register_command(hass, ws_resend)
 
 
 def _store_and_scope(
@@ -297,6 +305,57 @@ async def ws_delete(hass: HomeAssistant, connection: websocket_api.ActiveConnect
         connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Notification not found")
         return
     connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/resend", vol.Required("record_id"): str})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_resend(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Send a failed notify notification again to what failed; administrators only."""
+    if (scope := _store_and_scope(hass, connection, msg)) is None:
+        return
+    store, _ = scope
+    record = await store.async_get(msg["record_id"])
+    if record is None:
+        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Notification not found")
+        return
+    if record.source != NOTIFY_DOMAIN or record.status not in FAILED:
+        connection.send_error(msg["id"], websocket_api.ERR_NOT_SUPPORTED, "Only a failed notify notification")
+        return
+    errors = []
+    for service, data in _calls_again(hass, record):
+        context = connection.context(msg)
+        with resend(context.id, record.id) as sent:
+            try:
+                await hass.services.async_call(NOTIFY_DOMAIN, service, data, blocking=True, context=context)
+            except (HomeAssistantError, vol.Invalid) as err:
+                errors.append(str(err))
+                if sent.sent is not None:
+                    store.mark_failed(sent.sent, None, str(err))
+    if errors:
+        connection.send_error(msg["id"], websocket_api.ERR_HOME_ASSISTANT_ERROR, "; ".join(errors))
+        return
+    connection.send_result(msg["id"])
+
+
+def _calls_again(hass: HomeAssistant, record: NotificationRecord) -> list[tuple[str, dict[str, Any]]]:
+    """The notify calls that send a failed notification again: to each failed member of a group once, else as it
+    was; notify entities through send_message, which takes text only."""
+    failed = list(dict.fromkeys(call.channel for call in record.inner_calls if call.error and not call.group))
+    text = {ATTR_MESSAGE: record.message, **({ATTR_TITLE: record.title} if record.title else {})}
+    calls = []
+    for channel in failed or [record.channel]:
+        targets = channel.split(", ")
+        if all(hass.states.get(target) is not None for target in targets):
+            calls.append((SEND_MESSAGE, {**text, ATTR_ENTITY_ID: targets}))
+            continue
+        service = channel.removeprefix(f"{NOTIFY_DOMAIN}.")
+        data = {**text, **deepcopy(record.data or {})}
+        if record.group:
+            for defaults in member_defaults(hass, record.group.removeprefix(f"{NOTIFY_DOMAIN}."), service):
+                add_defaults(data, defaults)
+        calls.append((service, data))
+    return calls
 
 
 @websocket_api.websocket_command(

@@ -25,6 +25,7 @@ import {
   mdiImageOffOutline,
   mdiOpenInNew,
   mdiPlay,
+  mdiReplay,
   mdiPuzzleOutline,
   mdiRobotOutline,
   mdiScriptTextOutline,
@@ -39,6 +40,7 @@ import { countText, type Localize } from "./localize";
 import { followInternal, inline } from "./markdown";
 import { appData, fileName, loadable, type Media, notificationMedia, notificationTag, type Signer } from "./media";
 import { controlStyles, surface } from "./styles";
+import { errorMessage } from "./util";
 import type { Answer, NotificationRecord, Origin, OriginKind, Recipient, Status } from "./types";
 
 const BELL = "persistent_notification";
@@ -123,6 +125,14 @@ function personAvatar(name: string, picture: string | null): TemplateResult {
     : html`<span class="avatar initials">${initials(name)}</span>`;
 }
 
+function statusNote(text: string): TemplateResult {
+  return html`<p class="status-note">${text}</p>`;
+}
+
+function failed(record: NotificationRecord): boolean {
+  return record.status === "failed" || record.status === "partial";
+}
+
 function errorLine(text: string, extra = ""): TemplateResult {
   return html`<p class="error ${extra}">${icon(mdiAlertCircleOutline)}${text}</p>`;
 }
@@ -163,6 +173,8 @@ export class NotificationJournalRecord extends LitElement {
     _failed: { state: true },
     _sources: { state: true },
     sign: { attribute: false },
+    resend: { attribute: false },
+    _resend: { state: true },
     selectable: { type: Boolean },
     selected: { type: Boolean },
   };
@@ -182,6 +194,9 @@ export class NotificationJournalRecord extends LitElement {
   declare _failed: ReadonlySet<string>;
   declare _sources: ReadonlyMap<string, string>;
   declare sign: Signer | undefined;
+  /** Sends a failed notification again; only given to administrators. */
+  declare resend: ((recordId: string) => Promise<unknown>) | undefined;
+  declare _resend: "sending" | "sent" | { error: string } | undefined;
   private _found: Media = {};
   private _frame: Element | undefined;
   declare selectable: boolean;
@@ -252,7 +267,9 @@ export class NotificationJournalRecord extends LitElement {
           </header>
           <div class="indent">
             ${this._message()} ${this._statusNote(statusText)}
-            ${record.error ? errorLine(record.error) : this._failedCalls()} ${this._media()} ${this._buttons()}
+            ${record.error ? errorLine(record.error) : this._failedCalls()}
+            ${record.resent_from ? statusNote(this.localize("resent_note")) : nothing} ${this._sendAgain()}
+            ${this._media()} ${this._buttons()}
             <div class="chips">${this._origin()} ${this._route()} ${this._tag()}</div>
             ${this._calls ? this._innerCalls() : nothing} ${this._details ? this._detailList() : nothing}
           </div>
@@ -491,7 +508,7 @@ export class NotificationJournalRecord extends LitElement {
     const name = record.status_by ? this._originName(record.status_by) : undefined;
     const values = { status: statusText, time, name: name ?? "" };
     const text = this.localize(name ? "status_note_by" : "status_note", values);
-    return html`<p class="status-note">${text}</p>`;
+    return statusNote(text);
   }
 
   private _message(): TemplateResult | typeof nothing {
@@ -640,12 +657,32 @@ export class NotificationJournalRecord extends LitElement {
     </button>`;
   }
 
+  private _sendAgain(): TemplateResult | typeof nothing {
+    const state = this._resend;
+    if (!this.resend || this.record.source !== "notify" || !failed(this.record)) return nothing;
+    if (state === "sent") return statusNote(this.localize("resent_done"));
+    return html`<button class="button resend" ?disabled=${state === "sending"} @click=${this._sendAgainNow}>
+        ${icon(mdiReplay)}${this.localize(state === "sending" ? "resending" : "resend")}
+      </button>
+      ${typeof state === "object" ? errorLine(state.error) : nothing}`;
+  }
+
+  private readonly _sendAgainNow = async (): Promise<void> => {
+    this._resend = "sending";
+    try {
+      await this.resend!(this.record.id);
+      this._resend = "sent";
+    } catch (error) {
+      this._resend = { error: this.localize("resend_failed", { message: errorMessage(error) }) };
+    }
+  };
+
   private _failedCalls(): TemplateResult | typeof nothing {
     const record = this.record;
-    if (record.status !== "failed" && record.status !== "partial") return nothing;
+    if (!failed(record)) return nothing;
     const members = record.inner_calls.filter((call) => !call.group);
-    const failed = members.filter((call) => call.error).length;
-    return failed ? errorLine(this.localize("failed_calls", { count: failed, total: members.length })) : nothing;
+    const count = members.filter((call) => call.error).length;
+    return count ? errorLine(this.localize("failed_calls", { count, total: members.length })) : nothing;
   }
 
   private _innerCalls(): TemplateResult {
@@ -1223,6 +1260,21 @@ export class NotificationJournalRecord extends LitElement {
         overflow-x: auto;
         color: var(--primary-text-color);
         background: var(--card-background-color);
+      }
+      .button.resend {
+        margin: 6px 0 0;
+        background: none;
+        color: var(--primary-color);
+        font-family: inherit;
+        cursor: pointer;
+      }
+      .resend .icon {
+        width: 18px;
+        height: 18px;
+      }
+      .resend[disabled] {
+        color: var(--disabled-text-color);
+        cursor: default;
       }
       .more {
         display: flex;

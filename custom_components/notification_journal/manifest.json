@@ -2,6 +2,7 @@
   "domain": "notification_journal",
   "name": "Notification Journal",
   "after_dependencies": [
+    "group",
     "recorder",
     "trace"
   ],

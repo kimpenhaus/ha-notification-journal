@@ -79,6 +79,8 @@ Every card shows a status:
 | Partly failed | A group whose members failed in part; the error is shown at each failed member. |
 | Answered | Someone tapped one of its buttons in the Companion app. |
 
+Administrators can send a failed or partly failed notification again with *Send again*: Home Assistant calls the same action with the same text and data, buttons and tag included, for a group only to the members that failed, with what the group adds to their calls. Notify entities (`notify.send_message`) take text only, so they get title and message again. It is recorded as a new notification by hand that says it repeats a failed one; when the action fails again, that one is marked failed.
+
 Failed pushes of the Companion app are read from what it logs at *warning* and above; with its log level set higher (`logger:` in `configuration.yaml`), they stay *sent*.
 
 ## Privacy

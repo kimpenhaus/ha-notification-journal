@@ -38,6 +38,7 @@ export interface Call {
 }
 
 export interface NotificationRecord {
+  resent_from?: string | null;
   id: string;
   time: string;
   source: string;

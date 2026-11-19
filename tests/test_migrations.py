@@ -237,6 +237,7 @@ async def test_failed_notifications_count_after_the_step_to_version_6(tmp_path: 
     connection = sqlite3.connect(path)
     with connection:
         connection.execute("ALTER TABLE notification_counts DROP COLUMN failed")
+        connection.execute("ALTER TABLE notifications DROP COLUMN resent_from")
         connection.execute("PRAGMA user_version = 5")
     connection.close()
 
