@@ -119,6 +119,8 @@ export interface OriginStatistics {
   previous: number;
   with_buttons: number;
   answered: number;
+  failed: number;
+  previous_failed: number;
   bursts: number;
   night: number;
 }

@@ -36,19 +36,24 @@ from .models import (
 from .origin import origin_key
 from .statistics import (
     ALL,
+    COUNT_COLUMNS,
     COUNTS_SCHEMA,
+    FAILED,
     SLOT,
     UPSERT_COUNTS,
+    ZERO,
+    Counts,
     contributions,
     counts_of,
     difference,
     slot_of,
+    views_of,
     year_start,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 VISIBLE_TO_USER = f"rowid IN (SELECT notification FROM notification_users WHERE user_id IN (?, '{EVERYONE}'))"
 BACKUP_PAUSE_LIMIT = 1800
 MIGRATION_COPY_DAYS = 7
@@ -56,6 +61,14 @@ ORIGIN_KEY_OF_ROW = (
     f"coalesce(origin_entity_id, '{INTEGRATION_KEY_PREFIX}' || json_extract(origin, '$.integration'), origin_kind)"
 )
 """`origin.origin_key` of a stored row, to fill `origin_key` in migration 5."""
+USERS_OF_ROW = "(SELECT group_concat(user_id, char(31)) FROM notification_users WHERE notification = n.rowid)"
+"""Needs the row aliased as `n`; `_users_of` splits what it returns."""
+FAILED_ROW = f"status IN ({', '.join(f"'{status}'" for status in FAILED)})"
+
+
+def _users_of(value: str | None) -> list[str]:
+    return value.split("\x1f") if value else []
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notifications (
@@ -113,24 +126,43 @@ def _fill_counts(db: sqlite3.Connection) -> None:
     memory needed stays the same however large the journal is.
     """
     rows = db.execute(
-        """SELECT time, origin_key, json_array_length(data, '$.data.actions') > 0, answers,
-               (SELECT group_concat(user_id, char(31)) FROM notification_users WHERE notification = n.rowid)
+        f"""SELECT time, origin_key, json_array_length(data, '$.data.actions') > 0, answers, {USERS_OF_ROW},
+               {FAILED_ROW}
            FROM notifications n ORDER BY time"""
     )
-    totals: defaultdict[tuple[str, int, str], list[int]] = defaultdict(lambda: [0, 0, 0])
+    totals: defaultdict[tuple[str, int, str], list[int]] = defaultdict(lambda: list(ZERO))
     current = None
-    for sent, key, buttons, answers, users in rows:
+    for sent, key, buttons, answers, users, failed in rows:
         slot = slot_of(sent)
         if slot != current:
             db.executemany(UPSERT_COUNTS, [(*row, *values) for row, values in totals.items()])
             totals.clear()
             current = slot
         stored_answers = [answer_from_dict(a) for a in json.loads(answers)]
-        for view, counts in contributions(users.split("\x1f") if users else [], bool(buttons), stored_answers).items():
+        views = contributions(_users_of(users), bool(buttons), stored_answers, bool(failed))
+        for view, counts in views.items():
             total = totals[(view, slot, key)]
             for index, value in enumerate(counts):
                 total[index] += value
     db.executemany(UPSERT_COUNTS, [(*row, *values) for row, values in totals.items()])
+
+
+def _count_failed(db: sqlite3.Connection) -> None:
+    """A journal older than version 5 got the counts with this column, already filled, in the step to version 5."""
+    if "failed" in {row[1] for row in db.execute("PRAGMA table_info(notification_counts)")}:
+        return
+    db.execute("ALTER TABLE notification_counts ADD COLUMN failed INTEGER NOT NULL DEFAULT 0")
+    failed: Counter[tuple[str, int, str]] = Counter()
+    for sent, key, users in db.execute(
+        f"SELECT time, origin_key, {USERS_OF_ROW} FROM notifications n WHERE {FAILED_ROW}"
+    ):
+        for view in views_of(_users_of(users)):
+            failed[(view, slot_of(sent), key)] += 1
+    column = COUNT_COLUMNS.index("failed")
+    db.executemany(
+        UPSERT_COUNTS,
+        [(*row, *(count if i == column else 0 for i in range(len(ZERO)))) for row, count in failed.items()],
+    )
 
 
 Migration = str | Callable[[sqlite3.Connection], None]
@@ -159,6 +191,7 @@ MIGRATIONS: dict[int, tuple[Migration, ...]] = {
         *COUNTS_SCHEMA,
         _fill_counts,
     ),
+    6: (_count_failed,),
 }
 """The steps from the previous schema version to each version; a new version adds its step here."""
 
@@ -230,9 +263,9 @@ class Query:
 class CountedRows:
     """The counts of one view by quarter hour and origin, with what the statistics need around them."""
 
-    rows: list[tuple[int, str, int, int, int]]
-    previous: dict[str, int]
-    """The notifications of each origin in the span compared with."""
+    rows: list[tuple[int, str, int, int, int, int]]
+    previous: dict[str, tuple[int, int]]
+    """The notifications and the failed ones of each origin in the span compared with."""
     oldest: int | None
     """The oldest quarter hour counted for the view."""
     counting_since: int | None
@@ -649,14 +682,18 @@ class NotificationStore:
                 "UPDATE notifications SET status = ?, error = ?, inner_calls = ? WHERE id = ?",
                 (status.value, record_error, json.dumps([asdict(c) for c in calls]), record_id),
             )
+            self._recount(db, record, replace(record, status=status, error=record_error, inner_calls=calls))
 
     def _update_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
         db = self._db()
+        if (before := self._get(record_id)) is None:
+            return
         with db:
             db.execute(
                 "UPDATE notifications SET status = ?, status_time = ?, status_by = ? WHERE id = ?",
                 (status.value, time.timestamp(), json.dumps(asdict(by)) if by else None, record_id),
             )
+            self._recount(db, before, replace(before, status=status))
 
     def _add_answer(self, source: str, answer: Answer) -> str | None:
         db = self._db()
@@ -698,7 +735,7 @@ class NotificationStore:
         self._apply(db, after, difference(counts_of(before), counts_of(after)))
 
     @staticmethod
-    def _apply(db: sqlite3.Connection, record: NotificationRecord, changes: dict[str, tuple[int, int, int]]) -> None:
+    def _apply(db: sqlite3.Connection, record: NotificationRecord, changes: dict[str, Counts]) -> None:
         if changes:
             db.executemany(
                 UPSERT_COUNTS,
@@ -827,10 +864,16 @@ class NotificationStore:
         view = f"user_id IN ({', '.join('?' * len(users))})"
         within = f"FROM notification_counts WHERE {view} AND slot >= ? AND slot < ?"
         rows = db.execute(
-            f"SELECT slot, origin, sum(notifications), sum(with_buttons), sum(answered) {within} GROUP BY slot, origin",
+            f"SELECT slot, origin, {', '.join(f'sum({column})' for column in COUNT_COLUMNS)} {within} "
+            "GROUP BY slot, origin",
             [*users, *current],
         ).fetchall()
-        previous = dict(db.execute(f"SELECT origin, sum(notifications) {within} GROUP BY origin", [*users, *compared]))
+        previous = {
+            origin: (notifications, failed)
+            for origin, notifications, failed in db.execute(
+                f"SELECT origin, sum(notifications), sum(failed) {within} GROUP BY origin", [*users, *compared]
+            )
+        }
         keys = sorted({row[1] for row in rows} | previous.keys())
         return CountedRows(
             rows=rows,

@@ -43,13 +43,13 @@ CREATE TABLE notification_archive (
 ORIGIN = '{"kind": "unknown", "entity_id": null, "name": null, "trace_key": null, "run_id": null, "user_id": null}'
 
 
-def _old_database(path: Path, version: int) -> None:
+def _old_database(path: Path, version: int, status: str = "sent") -> None:
     connection = sqlite3.connect(path)
     connection.executescript(SCHEMA_1 + (ARCHIVE if version >= 2 else ""))
     connection.execute(
         "INSERT INTO notifications VALUES (1, 'old', ?, 'notify', 'notify.phone', 'Old', 'Kept', NULL, '[]', ?,"
-        " 'unknown', NULL, 'c', 'sent', NULL, NULL, '[]')",
-        (time.time() - 60, ORIGIN),
+        " 'unknown', NULL, 'c', ?, NULL, NULL, '[]')",
+        (time.time() - 60, ORIGIN, status),
     )
     connection.execute(f"PRAGMA user_version = {version}")
     connection.commit()
@@ -64,10 +64,10 @@ def _columns(path: Path) -> set[str]:
         connection.close()
 
 
-def _counts(path: Path) -> list[tuple[str, str, int]]:
+def _counts(path: Path) -> list[tuple[str, str, int, int]]:
     connection = sqlite3.connect(path)
     try:
-        return connection.execute("SELECT user_id, origin, notifications FROM notification_counts").fetchall()
+        return connection.execute("SELECT user_id, origin, notifications, failed FROM notification_counts").fetchall()
     finally:
         connection.close()
 
@@ -109,7 +109,7 @@ async def test_old_database_is_migrated_after_a_backup(tmp_path: Path, version: 
     assert records[0].answers == []
     assert _version(path) == SCHEMA_VERSION
     assert {"source_ref", "status_time", "status_by", "answers", "origin_key"} <= _columns(path)
-    assert _counts(path) == [("", "unknown", 1)]
+    assert _counts(path) == [("", "unknown", 1, 0)]
     backup = tmp_path / f"old.db.bak-v{version}"
     assert _version(backup) == version
     assert "source_ref" not in _columns(backup)
@@ -228,3 +228,28 @@ async def test_other_files_are_left_alone(tmp_path: Path) -> None:
     await _open_and_close(path)
 
     assert all(other.exists() for other in others)
+
+
+async def test_failed_notifications_count_after_the_step_to_version_6(tmp_path: Path) -> None:
+    path = tmp_path / "v5.db"
+    _old_database(path, 2, status="failed")
+    await _open_and_close(path)
+    connection = sqlite3.connect(path)
+    with connection:
+        connection.execute("ALTER TABLE notification_counts DROP COLUMN failed")
+        connection.execute("PRAGMA user_version = 5")
+    connection.close()
+
+    await _open_and_close(path)
+
+    assert _counts(path) == [("", "unknown", 1, 1)]
+    assert _version(path) == SCHEMA_VERSION
+
+
+async def test_a_failed_notification_of_an_old_journal_counts_once(tmp_path: Path) -> None:
+    path = tmp_path / "old.db"
+    _old_database(path, 2, status="failed")
+
+    await _open_and_close(path)
+
+    assert _counts(path) == [("", "unknown", 1, 1)]

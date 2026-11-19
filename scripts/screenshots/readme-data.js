@@ -93,7 +93,8 @@
     let seed = 11;
     const random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
     const heatmap = Array.from({ length: 7 }, () => Array(24).fill(0));
-    const result = origins.map(([key, name]) => ({ key, name, notifications: 0, previous: 0, with_buttons: 0, answered: 0, bursts: 0, night: 0 }));
+    const result = origins.map(([key, name]) => ({ key, name, notifications: 0, previous: 0, with_buttons: 0, answered: 0, failed: 0, previous_failed: 0, bursts: 0, night: 0 }));
+    const failures = { "automation.laundry_done": [2, 3], "automation.rain_warning": [1, 2] };
     const buckets = Array.from({ length: 7 }, (_, day) => ({ start: new Date(monday.getTime() + day * 86400000).toISOString(), counts: {} }));
     const now = new Date();
     const days = Math.min(7, Math.floor((now.getTime() - monday.getTime()) / 86400000) + 1);
@@ -117,6 +118,7 @@
         if (count) buckets[day].counts[key] = count;
       });
     }
+    for (const entry of result) [entry.failed, entry.previous_failed] = failures[entry.key] ?? [0, 0];
     const sum = (field) => result.reduce((total, entry) => total + entry[field], 0);
     return {
       period: "week",
@@ -125,7 +127,7 @@
       has_older: true,
       comparable: true,
       kept_since: new Date(today.getTime() - 90 * 86400000).toISOString(),
-      totals: { notifications: sum("notifications"), with_buttons: sum("with_buttons"), answered: sum("answered"), bursts: sum("bursts"), night: sum("night"), previous: sum("previous") },
+      totals: { notifications: sum("notifications"), with_buttons: sum("with_buttons"), answered: sum("answered"), failed: sum("failed"), bursts: sum("bursts"), night: sum("night"), previous: sum("previous"), previous_failed: sum("previous_failed") },
       buckets,
       heatmap,
       origins: result.sort((a, b) => b.notifications - a.notifications),

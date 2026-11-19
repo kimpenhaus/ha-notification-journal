@@ -23,7 +23,7 @@ from custom_components.notification_journal.models import (
     Recipient,
     RecipientKind,
 )
-from custom_components.notification_journal.statistics import period, summarize, year_start
+from custom_components.notification_journal.statistics import ZERO, Counts, period, summarize, year_start
 from custom_components.notification_journal.store import NotificationStore, _fill_counts
 
 BERLIN = ZoneInfo("Europe/Berlin")
@@ -62,13 +62,12 @@ async def store(tmp_path: Path) -> AsyncIterator[NotificationStore]:
     await store.async_close()
 
 
-async def _counts(store: NotificationStore, user_id: str | None = None) -> dict[str, tuple[int, int, int]]:
-    """Return notifications, with buttons and answered per origin, over all time."""
+async def _counts(store: NotificationStore, user_id: str | None = None) -> dict[str, Counts]:
     await store.async_flush()
     counted = await store.async_statistics(user_id, *ALL_TIME)
     totals: dict[str, list[int]] = {}
     for _slot, origin, *values in counted.rows:
-        total = totals.setdefault(origin, [0, 0, 0])
+        total = totals.setdefault(origin, list(ZERO))
         for index, value in enumerate(values):
             total[index] += value
     return {origin: tuple(values) for origin, values in totals.items()}
@@ -80,16 +79,16 @@ async def test_each_view_counts_what_it_may_see(store: NotificationStore) -> Non
     store.add(_record("bell", [BELL], origin=Origin(kind=OriginKind.SYSTEM)))
 
     assert await _counts(store) == {
-        "automation.garage": (1, 1, 0),
-        "integration.server_watch": (1, 0, 0),
-        "system": (1, 0, 0),
+        "automation.garage": (1, 1, 0, 0),
+        "integration.server_watch": (1, 0, 0, 0),
+        "system": (1, 0, 0, 0),
     }
     assert await _counts(store, "user-anna") == {
-        "automation.garage": (1, 1, 0),
-        "integration.server_watch": (1, 0, 0),
-        "system": (1, 0, 0),
+        "automation.garage": (1, 1, 0, 0),
+        "integration.server_watch": (1, 0, 0, 0),
+        "system": (1, 0, 0, 0),
     }
-    assert await _counts(store, "user-ben") == {"integration.server_watch": (1, 0, 0), "system": (1, 0, 0)}
+    assert await _counts(store, "user-ben") == {"integration.server_watch": (1, 0, 0, 0), "system": (1, 0, 0, 0)}
 
 
 async def test_members_of_a_group_count_when_their_call_arrives(store: NotificationStore) -> None:
@@ -98,17 +97,17 @@ async def test_members_of_a_group_count_when_their_call_arrives(store: Notificat
     store.add_inner_call("family", Call("notify.phone_ben", [BEN], "c2"))
     store.add_inner_call("family", Call("notify.phone_ben_2", [BEN], "c3"))
 
-    assert await _counts(store) == {"automation.garage": (1, 0, 0)}
-    assert await _counts(store, "user-anna") == {"automation.garage": (1, 0, 0)}
-    assert await _counts(store, "user-ben") == {"automation.garage": (1, 0, 0)}
+    assert await _counts(store) == {"automation.garage": (1, 0, 0, 0)}
+    assert await _counts(store, "user-anna") == {"automation.garage": (1, 0, 0, 0)}
+    assert await _counts(store, "user-ben") == {"automation.garage": (1, 0, 0, 0)}
 
 
 async def test_reaching_everyone_counts_once_per_user(store: NotificationStore) -> None:
     store.add(_record("mixed", [ANNA], group="notify.all", channel="notify.all"))
     store.add_inner_call("mixed", Call("notify.persistent_notification", [BELL], "c1"))
 
-    assert await _counts(store, "user-anna") == {"automation.garage": (1, 0, 0)}
-    assert await _counts(store, "user-ben") == {"automation.garage": (1, 0, 0)}
+    assert await _counts(store, "user-anna") == {"automation.garage": (1, 0, 0, 0)}
+    assert await _counts(store, "user-ben") == {"automation.garage": (1, 0, 0, 0)}
 
 
 async def test_answers_count_once_and_per_user(store: NotificationStore) -> None:
@@ -119,9 +118,9 @@ async def test_answers_count_once_and_per_user(store: NotificationStore) -> None
     await store.async_add_answer("notify", Answer(action="CLOSE", time=now, user_id="user-anna"))
     await store.async_add_answer("notify", Answer(action="CLOSE", time=now, user_id="user-ben"))
 
-    assert await _counts(store) == {"automation.garage": (1, 1, 1)}
-    assert await _counts(store, "user-anna") == {"automation.garage": (1, 1, 1)}
-    assert await _counts(store, "user-ben") == {"automation.garage": (1, 1, 1)}
+    assert await _counts(store) == {"automation.garage": (1, 1, 1, 0)}
+    assert await _counts(store, "user-anna") == {"automation.garage": (1, 1, 1, 0)}
+    assert await _counts(store, "user-ben") == {"automation.garage": (1, 1, 1, 0)}
 
 
 async def test_a_burst_is_a_quarter_hour_with_five_from_one_origin_in_a_view(store: NotificationStore) -> None:
@@ -148,8 +147,8 @@ async def test_nobody_sees_answers_to_everyone(store: NotificationStore) -> None
     await store.async_flush()
     await store.async_add_answer("notify", Answer(action="CLOSE", time=dt_util.utcnow(), user_id="user-ben"))
 
-    assert await _counts(store) == {"automation.garage": (1, 1, 1)}
-    assert await _counts(store, "user-anna") == {"automation.garage": (1, 1, 0)}
+    assert await _counts(store) == {"automation.garage": (1, 1, 1, 0)}
+    assert await _counts(store, "user-anna") == {"automation.garage": (1, 1, 0, 0)}
 
 
 async def test_counts_outlive_deleting_and_purging(store: NotificationStore) -> None:
@@ -159,7 +158,7 @@ async def test_counts_outlive_deleting_and_purging(store: NotificationStore) -> 
     await store.async_delete("new")
     await store.async_purge(30, 1000, 2)
 
-    assert await _counts(store) == {"automation.garage": (2, 0, 0)}
+    assert await _counts(store) == {"automation.garage": (2, 0, 0, 0)}
 
 
 async def test_counts_are_kept_whole_calendar_years_and_as_long_as_the_notifications(
@@ -179,6 +178,19 @@ async def test_counts_are_kept_whole_calendar_years_and_as_long_as_the_notificat
     assert (await _counts(store))["automation.garage"][0] == 2
 
 
+async def test_a_failure_counts_when_it_is_known(store: NotificationStore) -> None:
+    store.add(_record("door", [ANNA]))
+    store.add(_record("family", [], group="notify.family", channel="notify.family"))
+    store.add_inner_call("family", Call("notify.phone_anna", [ANNA], "c1"))
+    store.add_inner_call("family", Call("notify.phone_ben", [BEN], "c2"))
+    store.mark_failed("door", None, "Chat not found")
+    store.mark_failed("family", "notify.phone_ben", "Error sending notification to Ben")
+    store.mark_failed("family", "notify.phone_anna", "Error sending notification to Anna")
+
+    assert await _counts(store) == {"automation.garage": (2, 0, 0, 2)}
+    assert await _counts(store, "user-ben") == {"automation.garage": (1, 0, 0, 1)}
+
+
 async def test_filling_the_counts_of_older_notifications_matches_counting_them_as_they_come(tmp_path: Path) -> None:
     store = NotificationStore(str(tmp_path / "journal.db"))
     await store.async_open()
@@ -192,6 +204,9 @@ async def test_filling_the_counts_of_older_notifications_matches_counting_them_a
     store.add(_record("bell", [BELL], start + timedelta(hours=1), origin=Origin(kind=OriginKind.SYSTEM)))
     store.add(_record("family", [], start + timedelta(hours=2), group="notify.family"))
     store.add_inner_call("family", Call("notify.phone_anna", [ANNA], "c1"))
+    store.add_inner_call("family", Call("notify.phone_ben", [BEN], "c2"))
+    store.mark_failed("family", "notify.phone_ben", "Error sending notification to Ben")
+    store.mark_failed("a0", None, "Chat not found")
     await store.async_flush()
     await store.async_add_answer("notify", Answer(action="CLOSE", time=dt_util.utcnow(), user_id="user-ben"))
     expected = {user: await _counts(store, user) for user in (None, "user-anna", "user-ben")}
@@ -237,7 +252,7 @@ def test_a_half_hour_time_zone_keeps_its_hours() -> None:
     half_past = int(datetime(2026, 11, 15, 0, 30, tzinfo=KOLKATA).timestamp())
 
     summary = summarize(
-        [(midnight, "automation.garage", 1, 0, 0), (half_past, "automation.garage", 2, 0, 0)], {}, day, KOLKATA
+        [(midnight, "automation.garage", 1, 0, 0, 0), (half_past, "automation.garage", 2, 0, 0, 0)], {}, day, KOLKATA
     )
 
     assert midnight % 900 == 0
@@ -266,8 +281,8 @@ def test_summary_buckets_heatmap_night_and_comparison() -> None:
     friday_noon = int(datetime(2026, 11, 13, 12, tzinfo=BERLIN).timestamp())
 
     summary = summarize(
-        [(tuesday_night, "automation.garage", 2, 1, 1), (friday_noon, "integration.server_watch", 6, 0, 0)],
-        {"automation.garage": 4},
+        [(tuesday_night, "automation.garage", 2, 1, 1, 1), (friday_noon, "integration.server_watch", 6, 0, 0, 0)],
+        {"automation.garage": (4, 2)},
         week,
         BERLIN,
     )
@@ -276,9 +291,11 @@ def test_summary_buckets_heatmap_night_and_comparison() -> None:
         "notifications": 8,
         "with_buttons": 1,
         "answered": 1,
+        "failed": 1,
         "bursts": 1,
         "night": 2,
         "previous": 4,
+        "previous_failed": 2,
     }
     assert [bucket["counts"] for bucket in summary["buckets"]][1] == {"automation.garage": 2}
     assert summary["buckets"][4]["counts"] == {"integration.server_watch": 6}

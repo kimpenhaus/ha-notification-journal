@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, tzinfo
 from typing import Any, Literal, get_args
 
-from .models import EVERYONE, Answer, NotificationRecord
+from .models import EVERYONE, Answer, NotificationRecord, Status
 
 ALL = ""
 """The user id of the rows that count every notification once, for administrators."""
@@ -32,7 +32,8 @@ SLOT = 900
 
 PeriodKind = Literal["day", "week", "month", "year"]
 PERIOD_KINDS: tuple[PeriodKind, ...] = get_args(PeriodKind)
-FIELDS = ("notifications", "with_buttons", "answered", "bursts", "night", "previous")
+FIELDS = ("notifications", "with_buttons", "answered", "failed", "bursts", "night", "previous", "previous_failed")
+FAILED = (Status.FAILED, Status.PARTIAL)
 
 COUNTS_SCHEMA = (
     """CREATE TABLE IF NOT EXISTS notification_counts (
@@ -42,22 +43,24 @@ COUNTS_SCHEMA = (
         notifications INTEGER NOT NULL DEFAULT 0,
         with_buttons INTEGER NOT NULL DEFAULT 0,
         answered INTEGER NOT NULL DEFAULT 0,
+        failed INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (user_id, slot, origin)
     ) WITHOUT ROWID""",
     "CREATE INDEX IF NOT EXISTS notification_counts_slot ON notification_counts (slot)",
 )
 
-UPSERT_COUNTS = """
-INSERT INTO notification_counts (user_id, slot, origin, notifications, with_buttons, answered)
-VALUES (?, ?, ?, ?, ?, ?)
+COUNT_COLUMNS = ("notifications", "with_buttons", "answered", "failed")
+"""What a row counts, in this order everywhere: notifications, with buttons, answered, failed in whole or in part."""
+
+UPSERT_COUNTS = f"""
+INSERT INTO notification_counts (user_id, slot, origin, {", ".join(COUNT_COLUMNS)})
+VALUES (?, ?, ?, {", ".join("?" * len(COUNT_COLUMNS))})
 ON CONFLICT (user_id, slot, origin) DO UPDATE SET
-    notifications = notifications + excluded.notifications,
-    with_buttons = with_buttons + excluded.with_buttons,
-    answered = answered + excluded.answered
+    {", ".join(f"{column} = {column} + excluded.{column}" for column in COUNT_COLUMNS)}
 """
 
-Counts = tuple[int, int, int]
-"""notifications, with buttons, answered."""
+Counts = tuple[int, ...]
+ZERO: Counts = (0,) * len(COUNT_COLUMNS)
 
 
 def slot_of(stamp: float) -> int:
@@ -71,35 +74,39 @@ def has_buttons(data: dict[str, Any] | None) -> bool:
     return isinstance(inner, dict) and bool(inner.get("actions"))
 
 
-def contributions(users: Iterable[str], buttons: bool, answers: list[Answer]) -> dict[str, Counts]:
+def views_of(users: Iterable[str]) -> set[str]:
+    """Return the views a notification counts for: ALL, and its users, or EVERYONE alone once it reached everyone."""
+    users = set(users)
+    return {ALL} | ({EVERYONE} if EVERYONE in users else users)
+
+
+def contributions(users: Iterable[str], buttons: bool, answers: list[Answer], failed: bool) -> dict[str, Counts]:
     """Return what one notification adds to the rows of each view it counts for.
 
-    Besides ALL, those are its users, or EVERYONE alone once it reached everyone. A user's row counts only that
-    user's answer, the same as the panel shows; EVERYONE's row counts none, as nobody may see another user's answer.
+    A user's row counts only that user's answer, the same as the panel shows; EVERYONE's row counts none, as nobody
+    may see another user's answer.
     """
-    users = set(users)
     answered_by = {answer.user_id for answer in answers}
-    result: dict[str, Counts] = {ALL: (1, int(buttons), int(bool(answers)))}
-    for view in {EVERYONE} if EVERYONE in users else users:
-        result[view] = (1, int(buttons), int(view in answered_by))
-    return result
+    return {
+        view: (1, int(buttons), int(bool(answers) if view == ALL else view in answered_by), int(failed))
+        for view in views_of(users)
+    }
 
 
 def counts_of(record: NotificationRecord | None) -> dict[str, Counts]:
     """Return what a stored notification adds to the rows of each view; nothing for none."""
     if record is None:
         return {}
-    return contributions(record.user_ids, has_buttons(record.data), record.answers)
+    return contributions(record.user_ids, has_buttons(record.data), record.answers, record.status in FAILED)
 
 
 def difference(before: dict[str, Counts], after: dict[str, Counts]) -> dict[str, Counts]:
     """Return what changes in each view's row when a notification's contributions change."""
     result = {}
     for view in before.keys() | after.keys():
-        old = before.get(view, (0, 0, 0))
-        new = after.get(view, (0, 0, 0))
+        old, new = before.get(view, ZERO), after.get(view, ZERO)
         if old != new:
-            result[view] = (new[0] - old[0], new[1] - old[1], new[2] - old[2])
+            result[view] = tuple(n - o for n, o in zip(new, old, strict=True))
     return result
 
 
@@ -162,17 +169,21 @@ def year_start(now: datetime, years: int) -> datetime:
 
 
 def summarize(
-    rows: Iterable[tuple[int, str, int, int, int]], previous: dict[str, int], current: Period, zone: tzinfo
+    rows: Iterable[tuple[int, str, int, int, int, int]],
+    previous: dict[str, tuple[int, int]],
+    current: Period,
+    zone: tzinfo,
 ) -> dict[str, Any]:
-    """Turn the rows (slot, origin, notifications, with buttons, answered) of one view within the period, and its
-    notifications per origin in the part compared with, into what the panel shows."""
+    """Turn the rows (slot, origin, notifications, with buttons, answered, failed) of one view within the period, and
+    its notifications and failed ones per origin in the part compared with, into what the panel shows."""
     stamps = [bucket.timestamp() for bucket in current.buckets]
     buckets: list[defaultdict[str, int]] = [defaultdict(int) for _ in stamps]
     heatmap = [[0] * 24 for _ in range(7)]
     origins: defaultdict[str, dict[str, int]] = defaultdict(lambda: dict.fromkeys(FIELDS, 0))
-    for origin, notifications in previous.items():
+    for origin, (notifications, failed) in previous.items():
         origins[origin]["previous"] = notifications
-    for slot, origin, notifications, with_buttons, answered in rows:
+        origins[origin]["previous_failed"] = failed
+    for slot, origin, notifications, with_buttons, answered, failed in rows:
         entry = origins[origin]
         local = datetime.fromtimestamp(slot, zone)
         buckets[bisect_right(stamps, slot) - 1][origin] += notifications
@@ -180,6 +191,7 @@ def summarize(
         entry["notifications"] += notifications
         entry["with_buttons"] += with_buttons
         entry["answered"] += answered
+        entry["failed"] += failed
         entry["bursts"] += notifications >= BURST_SIZE
         if local.hour >= NIGHT_FROM or local.hour < NIGHT_UNTIL:
             entry["night"] += notifications
