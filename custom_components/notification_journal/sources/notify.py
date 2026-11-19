@@ -19,7 +19,7 @@ from ..recipients import (
     legacy_group_members,
 )
 from ..store import NotificationStore
-from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, Listener, as_list, new_record
+from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, Listener, as_list, new_record, resending
 
 GROUP_CALL_WINDOW = 5.0
 EVENT_NOTIFICATION_ACTION = "mobile_app_notification_action"
@@ -38,6 +38,8 @@ class _GroupCall:
     started: float
     entity_group: bool
     """A notify group entity calls its members in its own context, a legacy group in a new one."""
+    resent_from: str | None
+    """Set when the panel sends the group again: its member calls then belong to that sending only."""
 
 
 _group_call: ContextVar[_GroupCall | None] = ContextVar("notification_journal_group_call", default=None)
@@ -134,6 +136,7 @@ class NotifySource:
                     message=message,
                     started=event.time_fired_timestamp,
                     entity_group=service == SEND_MESSAGE,
+                    resent_from=resending.get(),
                 )
             )
 
@@ -207,6 +210,7 @@ class NotifySource:
             and parent.members.issuperset(channels)
             and message == parent.message
             and event.time_fired_timestamp - parent.started < GROUP_CALL_WINDOW
+            and parent.resent_from == resending.get()
         )
 
 

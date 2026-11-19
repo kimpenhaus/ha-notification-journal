@@ -93,7 +93,8 @@ CREATE TABLE IF NOT EXISTS notifications (
     status_time REAL,
     status_by TEXT,
     answers TEXT NOT NULL DEFAULT '[]',
-    origin_key TEXT NOT NULL DEFAULT ''
+    origin_key TEXT NOT NULL DEFAULT '',
+    resent_from TEXT
 );
 CREATE INDEX IF NOT EXISTS notifications_time ON notifications (time);
 CREATE INDEX IF NOT EXISTS notifications_origin ON notifications (origin_entity_id);
@@ -191,7 +192,7 @@ MIGRATIONS: dict[int, tuple[Migration, ...]] = {
         *COUNTS_SCHEMA,
         _fill_counts,
     ),
-    6: (_count_failed,),
+    6: (_count_failed, "ALTER TABLE notifications ADD COLUMN resent_from TEXT"),
 }
 """The steps from the previous schema version to each version; a new version adds its step here."""
 
@@ -614,8 +615,8 @@ class NotificationStore:
             cursor = db.execute(
                 """INSERT INTO notifications (id, time, source, channel, title, message, data, recipients, origin,
                        origin_kind, origin_entity_id, context_id, status, error, grp, inner_calls, source_ref,
-                       status_time, status_by, answers, origin_key)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       status_time, status_by, answers, origin_key, resent_from)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     record.id,
                     record.time.timestamp(),
@@ -638,6 +639,7 @@ class NotificationStore:
                     json.dumps(asdict(record.status_by)) if record.status_by else None,
                     json.dumps([answer.as_dict() for answer in record.answers]),
                     origin_key(record.origin),
+                    record.resent_from,
                 ),
             )
             self._index(db, cursor.lastrowid, record)
@@ -921,6 +923,7 @@ class NotificationStore:
             status_by,
             answers,
             _origin_key,
+            resent_from,
         ) = row
         return NotificationRecord(
             id=record_id,
@@ -941,4 +944,5 @@ class NotificationStore:
             status_time=None if status_time is None else dt_util.utc_from_timestamp(status_time),
             status_by=None if status_by is None else origin_from_dict(json.loads(status_by)),
             answers=[answer_from_dict(a) for a in json.loads(answers)],
+            resent_from=resent_from,
         )

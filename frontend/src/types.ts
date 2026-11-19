@@ -38,6 +38,8 @@ export interface Call {
 }
 
 export interface NotificationRecord {
+  /** The failed notification this one sends again, by hand from the panel. */
+  resent_from?: string | null;
   id: string;
   time: string;
   source: string;

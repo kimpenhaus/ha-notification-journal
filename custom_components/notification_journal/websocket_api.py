@@ -7,7 +7,9 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
+from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.util import dt as dt_util
@@ -15,7 +17,9 @@ from homeassistant.util import dt as dt_util
 from .const import CONF_NON_ADMIN_VISIBILITY, DEFAULT_OPTIONS, DOMAIN, SIGNAL_CHANGED, Visibility
 from .models import NotificationRecord, RecipientKind, Status
 from .origin import OriginNames, origin_key
-from .statistics import PERIOD_KINDS, period, summarize
+from .recipients import NOTIFY_DOMAIN, SEND_MESSAGE
+from .sources import ATTR_MESSAGE, ATTR_TITLE, resending
+from .statistics import FAILED, PERIOD_KINDS, period, summarize
 from .store import NotificationStore, Query
 
 MAX_LIMIT = 200
@@ -34,6 +38,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_subscribe)
     websocket_api.async_register_command(hass, ws_delete)
     websocket_api.async_register_command(hass, ws_archive)
+    websocket_api.async_register_command(hass, ws_resend)
 
 
 def _store_and_scope(
@@ -297,6 +302,55 @@ async def ws_delete(hass: HomeAssistant, connection: websocket_api.ActiveConnect
         connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Notification not found")
         return
     connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/resend", vol.Required("record_id"): str})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_resend(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Send a failed notify notification again to what failed; administrators only.
+
+    It goes through Home Assistant's own action call, by the administrator, so the notify source records it as a new
+    notification by hand that refers to the failed one.
+    """
+    if (scope := _store_and_scope(hass, connection, msg)) is None:
+        return
+    store, _ = scope
+    record = await store.async_get(msg["record_id"])
+    if record is None:
+        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Notification not found")
+        return
+    if record.source != NOTIFY_DOMAIN or record.status not in FAILED:
+        connection.send_error(msg["id"], websocket_api.ERR_NOT_SUPPORTED, "Only a failed notify notification")
+        return
+    token = resending.set(record.id)
+    try:
+        for service, data in _calls_again(hass, record):
+            await hass.services.async_call(NOTIFY_DOMAIN, service, data, blocking=True, context=connection.context(msg))
+    except (HomeAssistantError, vol.Invalid) as err:
+        connection.send_error(msg["id"], websocket_api.ERR_HOME_ASSISTANT_ERROR, str(err))
+        return
+    finally:
+        resending.reset(token)
+    connection.send_result(msg["id"])
+
+
+def _calls_again(hass: HomeAssistant, record: NotificationRecord) -> list[tuple[str, dict[str, Any]]]:
+    """The notify calls that send a failed notification again: to each failed member of a group, else as it was.
+
+    A channel is a legacy action (notify.mobile_app_phone) or notify entities (send_message, which takes no data).
+    """
+    failed = [call.channel for call in record.inner_calls if call.error and not call.group]
+    text = {ATTR_MESSAGE: record.message, **({ATTR_TITLE: record.title} if record.title else {})}
+    calls = []
+    for channel in failed or [record.channel]:
+        targets = channel.split(", ")
+        service = targets[0].removeprefix(f"{NOTIFY_DOMAIN}.")
+        if len(targets) == 1 and hass.services.has_service(NOTIFY_DOMAIN, service) and service != SEND_MESSAGE:
+            calls.append((service, {**text, **(record.data or {})}))
+        else:
+            calls.append((SEND_MESSAGE, {**text, ATTR_ENTITY_ID: targets}))
+    return calls
 
 
 @websocket_api.websocket_command(

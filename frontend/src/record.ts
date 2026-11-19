@@ -25,6 +25,7 @@ import {
   mdiImageOffOutline,
   mdiOpenInNew,
   mdiPlay,
+  mdiReplay,
   mdiPuzzleOutline,
   mdiRobotOutline,
   mdiScriptTextOutline,
@@ -39,6 +40,7 @@ import { countText, type Localize } from "./localize";
 import { followInternal, inline } from "./markdown";
 import { appData, fileName, loadable, type Media, notificationMedia, notificationTag, type Signer } from "./media";
 import { controlStyles, surface } from "./styles";
+import { errorMessage } from "./util";
 import type { Answer, NotificationRecord, Origin, OriginKind, Recipient, Status } from "./types";
 
 const BELL = "persistent_notification";
@@ -163,6 +165,9 @@ export class NotificationJournalRecord extends LitElement {
     _failed: { state: true },
     _sources: { state: true },
     sign: { attribute: false },
+    resend: { attribute: false },
+    _resending: { state: true },
+    _resendError: { state: true },
     selectable: { type: Boolean },
     selected: { type: Boolean },
   };
@@ -182,6 +187,10 @@ export class NotificationJournalRecord extends LitElement {
   declare _failed: ReadonlySet<string>;
   declare _sources: ReadonlyMap<string, string>;
   declare sign: Signer | undefined;
+  /** Sends a failed notification again; only given to administrators. */
+  declare resend: ((recordId: string) => Promise<unknown>) | undefined;
+  declare _resending: boolean;
+  declare _resendError: string | undefined;
   private _found: Media = {};
   private _frame: Element | undefined;
   declare selectable: boolean;
@@ -197,6 +206,7 @@ export class NotificationJournalRecord extends LitElement {
     this._calls = false;
     this._playing = false;
     this._viewing = false;
+    this._resending = false;
     this._failed = new Set();
     this._sources = new Map();
     this.selectable = false;
@@ -252,7 +262,8 @@ export class NotificationJournalRecord extends LitElement {
           </header>
           <div class="indent">
             ${this._message()} ${this._statusNote(statusText)}
-            ${record.error ? errorLine(record.error) : this._failedCalls()} ${this._media()} ${this._buttons()}
+            ${record.error ? errorLine(record.error) : this._failedCalls()} ${this._sendAgain()} ${this._media()}
+            ${this._buttons()}
             <div class="chips">${this._origin()} ${this._route()} ${this._tag()}</div>
             ${this._calls ? this._innerCalls() : nothing} ${this._details ? this._detailList() : nothing}
           </div>
@@ -638,6 +649,30 @@ export class NotificationJournalRecord extends LitElement {
         mdiChevronDown,
       )}
     </button>`;
+  }
+
+  private _sendAgain(): TemplateResult | typeof nothing {
+    const record = this.record;
+    const resend = this.resend;
+    if (record.resent_from) return html`<p class="status-note">${this.localize("resent_note")}</p>`;
+    if (!resend || record.source !== "notify" || (record.status !== "failed" && record.status !== "partial")) {
+      return nothing;
+    }
+    const send = async () => {
+      this._resending = true;
+      this._resendError = undefined;
+      try {
+        await resend(record.id);
+      } catch (error) {
+        this._resendError = this.localize("resend_failed", { message: errorMessage(error) });
+      } finally {
+        this._resending = false;
+      }
+    };
+    return html`<button class="resend" ?disabled=${this._resending} @click=${send}>
+        ${icon(mdiReplay)}${this.localize(this._resending ? "resending" : "resend")}
+      </button>
+      ${this._resendError ? errorLine(this._resendError) : nothing}`;
   }
 
   private _failedCalls(): TemplateResult | typeof nothing {
@@ -1223,6 +1258,28 @@ export class NotificationJournalRecord extends LitElement {
         overflow-x: auto;
         color: var(--primary-text-color);
         background: var(--card-background-color);
+      }
+      .resend {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin: 6px 0 0;
+        padding: 4px 8px 4px 6px;
+        border: 1px solid var(--divider-color);
+        border-radius: 6px;
+        background: none;
+        color: var(--primary-color);
+        font: inherit;
+        font-size: 0.85rem;
+        cursor: pointer;
+      }
+      .resend .icon {
+        width: 18px;
+        height: 18px;
+      }
+      .resend[disabled] {
+        color: var(--disabled-text-color);
+        cursor: default;
       }
       .more {
         display: flex;
