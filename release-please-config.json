@@ -6,6 +6,7 @@
       "package-name": "notification_journal",
       "bump-minor-pre-major": true,
       "include-component-in-tag": false,
+      "pull-request-title-pattern": "chore(release): ${version}",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         {
@@ -14,7 +15,20 @@
           "jsonpath": "$.version"
         }
       ],
-      "initial-version": "0.1.0"
+      "initial-version": "0.1.0",
+      "changelog-sections": [
+        { "type": "feat", "section": "New" },
+        { "type": "fix", "section": "Fixed" },
+        { "type": "perf", "section": "Improved" },
+        { "type": "revert", "section": "Reverted" },
+        { "type": "docs", "section": "Documentation", "hidden": true },
+        { "type": "chore", "section": "Maintenance", "hidden": true },
+        { "type": "ci", "section": "Maintenance", "hidden": true },
+        { "type": "test", "section": "Maintenance", "hidden": true },
+        { "type": "refactor", "section": "Maintenance", "hidden": true },
+        { "type": "build", "section": "Maintenance", "hidden": true },
+        { "type": "style", "section": "Maintenance", "hidden": true }
+      ]
     }
   }
 }

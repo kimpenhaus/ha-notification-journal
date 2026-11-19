@@ -30,10 +30,10 @@
 
 ## Commits, Pull Requests and Releases
 
-- Every change goes through a pull request with a green `ci`, merged by squash; the pull request title becomes the commit message.
+- Every change goes through a pull request with a green `ci`, merged by squash; the pull request title becomes the commit subject and its description the commit body.
 - Before a pull request is pushed, run `/code-review`, `/simplify` and `/security-review` on its changes and work their findings in; the description says what they found and what was left out on purpose. This holds for every pull request, small fixes included.
-- Conventional Commit subjects: `type(scope): imperative summary`, lowercase, at most 50 characters. release-please derives the version and the changelog from them: `fix` is a patch, `feat` a minor version, `!` a breaking change.
-- `feat`, `fix` and `perf` end up in the release notes, so they describe what users notice; changes to CI, tooling or docs use `ci`, `chore` or `docs`, even when they repair something.
+- Conventional Commit subjects: `type(scope): imperative summary`, lowercase, without a final period, at most 50 characters. The scope is required and one of those in `.github/workflows/pr-title.yml`, which checks the title of every pull request (`Conventional PR title`); a new part of the integration adds its scope there. release-please derives the version and the changelog from the subjects: `fix` is a patch, `feat` a minor version, `!` a breaking change.
+- `feat`, `fix`, `perf` and `revert` end up in the release notes, so they describe what users notice; changes to CI, tests, tooling or docs use `ci`, `test`, `chore` or `docs`, even when they repair something, with the scope of the part they concern (`test(store): …`, `ci(release): …`). There is no scope for tests or CI, so `fix(tests)` does not pass the check.
 - A pull request that resolves an issue has `Closes #<n>` in its description.
 - Do not edit the version in `manifest.json` or `CHANGELOG.md` by hand; release-please does that in its release pull request.
 - Before the release pull request is merged, compare `README.md`, `docs/DEVELOPMENT.md` and the screenshots with everything the release contains (its changelog): every feature is in the README's feature list, and every one users can see is on a screenshot. Close the gaps by pull request first; that each pull request updated the docs does not replace this check.
