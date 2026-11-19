@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/kimpenhaus/ha-notification-journal/compare/v0.3.1...v0.4.0) (2026-11-19)
+
+
+### Features
+
+* **failures:** read raised errors from traces ([#87](https://github.com/kimpenhaus/ha-notification-journal/issues/87)) ([ec05fa4](https://github.com/kimpenhaus/ha-notification-journal/commit/ec05fa4a4550d63ed63642f7133ddefd6b19da31))
+* record notifications that failed to send ([#86](https://github.com/kimpenhaus/ha-notification-journal/issues/86)) ([ff1c2df](https://github.com/kimpenhaus/ha-notification-journal/commit/ff1c2dfa4d8408117c74e54c993886ca5f20d10b))
+* send a failed notification again ([#90](https://github.com/kimpenhaus/ha-notification-journal/issues/90)) ([2af0470](https://github.com/kimpenhaus/ha-notification-journal/commit/2af0470ba0515c7aac434b265579fec48044629c))
+* **statistics:** count and show failed ones ([#88](https://github.com/kimpenhaus/ha-notification-journal/issues/88)) ([0a24c29](https://github.com/kimpenhaus/ha-notification-journal/commit/0a24c29449418c75287426ef7146149c4e38a59a))
+
+
+### Bug Fixes
+
+* **panel:** catch up after the connection returns ([#93](https://github.com/kimpenhaus/ha-notification-journal/issues/93)) ([a65c843](https://github.com/kimpenhaus/ha-notification-journal/commit/a65c8432561e944d07ef0bb9b7574aeca8b3c4a4))
+* **tests:** wait for the notify group before calling it ([#81](https://github.com/kimpenhaus/ha-notification-journal/issues/81)) ([139fc6c](https://github.com/kimpenhaus/ha-notification-journal/commit/139fc6cf8710180d47c7076c61deee1588b8c668))
+
 ## [0.3.1](https://github.com/kimpenhaus/ha-notification-journal/compare/v0.3.0...v0.3.1) (2026-11-17)
 
 
