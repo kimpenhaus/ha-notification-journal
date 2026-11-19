@@ -27,7 +27,7 @@ Home Assistant forgets a notification the moment it is sent. Notification Journa
 - **Archive**: select notifications and move them out of your view, as in Home Assistant's own lists; the archive is per person, others keep seeing them.
 - **Private by person**: administrators see everything; everybody else sees the notifications sent to them, the bell and spoken announcements. Telegram chats belong to no Home Assistant user, so only administrators see those.
 - **Starts with the past**: on first setup it imports what Home Assistant's recorder still holds (10 days by default): notify calls, spoken announcements, Telegram messages and the answers to buttons. The automation or script that sent them comes from the recorded context; a notification an integration sent shows as unknown, and the bell's notifications from before are not in the recorder.
-- **Live**: the panel updates while it is open.
+- **Live**: the panel updates while it is open, and catches up on what it missed while its connection was down.
 - English and German.
 
 ## Installation

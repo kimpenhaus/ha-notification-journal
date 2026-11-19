@@ -157,7 +157,13 @@ export interface HassEntityState {
 
 export interface HassConnection {
   sendMessagePromise<T>(message: Record<string, unknown>): Promise<T>;
-  subscribeMessage<T>(callback: (message: T) => void, message: Record<string, unknown>): Promise<() => Promise<void>>;
+  subscribeMessage<T>(
+    callback: (message: T) => void,
+    message: Record<string, unknown>,
+    options?: { resubscribe?: boolean },
+  ): Promise<() => Promise<void>>;
+  addEventListener(event: "ready", listener: () => void): void;
+  removeEventListener(event: "ready", listener: () => void): void;
 }
 
 export interface PanelInfo {
