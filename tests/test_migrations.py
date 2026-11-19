@@ -45,13 +45,13 @@ CREATE TABLE notification_archive (
 ORIGIN = '{"kind": "unknown", "entity_id": null, "name": null, "trace_key": null, "run_id": null, "user_id": null}'
 
 
-def _old_database(path: Path, version: int) -> None:
+def _old_database(path: Path, version: int, status: str = "sent") -> None:
     connection = sqlite3.connect(path)
     connection.executescript(SCHEMA_1 + (ARCHIVE if version >= 2 else ""))
     connection.execute(
         "INSERT INTO notifications VALUES (1, 'old', ?, 'notify', 'notify.phone', 'Old', 'Kept', NULL, '[]', ?,"
-        " 'unknown', NULL, 'c', 'sent', NULL, NULL, '[]')",
-        (time.time() - 60, ORIGIN),
+        " 'unknown', NULL, 'c', ?, NULL, NULL, '[]')",
+        (time.time() - 60, ORIGIN, status),
     )
     connection.execute(f"PRAGMA user_version = {version}")
     connection.commit()
@@ -270,3 +270,20 @@ async def test_failed_notifications_count_after_the_step_to_version_6(tmp_path: 
     finally:
         connection.close()
     assert _version(path) == SCHEMA_VERSION
+
+
+async def test_a_failed_notification_of_an_old_journal_counts_once(tmp_path: Path) -> None:
+    path = tmp_path / "old.db"
+    _old_database(path, 2, status="failed")
+
+    store = NotificationStore(str(path))
+    await store.async_open()
+    await store.async_close()
+
+    connection = sqlite3.connect(path)
+    try:
+        assert connection.execute("SELECT user_id, notifications, failed FROM notification_counts").fetchall() == [
+            ("", 1, 1)
+        ]
+    finally:
+        connection.close()

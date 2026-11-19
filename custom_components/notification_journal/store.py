@@ -58,6 +58,10 @@ ORIGIN_KEY_OF_ROW = (
     f"coalesce(origin_entity_id, '{INTEGRATION_KEY_PREFIX}' || json_extract(origin, '$.integration'), origin_kind)"
 )
 """`origin.origin_key` of a stored row, to fill `origin_key` in migration 5."""
+USERS_OF_ROW = "(SELECT group_concat(user_id, char(31)) FROM notification_users WHERE notification = n.rowid)"
+"""The users of a stored row `n`, separated by the unit separator."""
+FAILED_ROW = f"status IN ({', '.join(repr(str(status)) for status in FAILED)})"
+"""Whether a stored row failed in whole or in part."""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notifications (
@@ -115,9 +119,8 @@ def _fill_counts(db: sqlite3.Connection) -> None:
     memory needed stays the same however large the journal is.
     """
     rows = db.execute(
-        f"""SELECT time, origin_key, json_array_length(data, '$.data.actions') > 0, answers,
-               (SELECT group_concat(user_id, char(31)) FROM notification_users WHERE notification = n.rowid),
-               status IN ({", ".join(f"'{status}'" for status in FAILED)})
+        f"""SELECT time, origin_key, json_array_length(data, '$.data.actions') > 0, answers, {USERS_OF_ROW},
+               {FAILED_ROW}
            FROM notifications n ORDER BY time"""
     )
     totals: defaultdict[tuple[str, int, str], list[int]] = defaultdict(lambda: [0, 0, 0, 0])
@@ -145,16 +148,13 @@ def _count_failed(db: sqlite3.Connection) -> None:
     if "failed" in {row[1] for row in db.execute("PRAGMA table_info(notification_counts)")}:
         return
     db.execute("ALTER TABLE notification_counts ADD COLUMN failed INTEGER NOT NULL DEFAULT 0")
-    rows = db.execute(
-        f"""SELECT time, origin_key,
-               (SELECT group_concat(user_id, char(31)) FROM notification_users WHERE notification = n.rowid)
-           FROM notifications n WHERE status IN ({", ".join(f"'{status}'" for status in FAILED)})"""
-    )
-    for sent, key, users in rows.fetchall():
-        views = contributions(users.split("\x1f") if users else [], False, [], True)
-        db.executemany(
-            UPSERT_COUNTS, [(view, slot_of(sent), key, 0, 0, 0, counts[3]) for view, counts in views.items()]
-        )
+    failed: Counter[tuple[str, int, str]] = Counter()
+    for sent, key, users in db.execute(
+        f"SELECT time, origin_key, {USERS_OF_ROW} FROM notifications n WHERE {FAILED_ROW}"
+    ):
+        for view in contributions(users.split("\x1f") if users else [], False, []):
+            failed[(view, slot_of(sent), key)] += 1
+    db.executemany(UPSERT_COUNTS, [(*row, 0, 0, 0, count) for row, count in failed.items()])
 
 
 Migration = str | Callable[[sqlite3.Connection], None]
@@ -255,9 +255,9 @@ class Query:
 class CountedRows:
     """The counts of one view by quarter hour and origin, with what the statistics need around them."""
 
-    rows: list[tuple[int, str, int, int, int]]
+    rows: list[tuple[int, str, int, int, int, int]]
     previous: dict[str, tuple[int, int]]
-    """The notifications of each origin in the span compared with."""
+    """The notifications and the failed ones of each origin in the span compared with."""
     oldest: int | None
     """The oldest quarter hour counted for the view."""
     counting_since: int | None
@@ -678,11 +678,14 @@ class NotificationStore:
 
     def _update_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
         db = self._db()
+        before = self._get(record_id)
         with db:
             db.execute(
                 "UPDATE notifications SET status = ?, status_time = ?, status_by = ? WHERE id = ?",
                 (status.value, time.timestamp(), json.dumps(asdict(by)) if by else None, record_id),
             )
+            if before is not None:
+                self._recount(db, before, replace(before, status=status))
 
     def _add_answer(self, source: str, answer: Answer) -> str | None:
         db = self._db()

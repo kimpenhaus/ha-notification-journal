@@ -205,9 +205,12 @@ async def test_filling_the_counts_of_older_notifications_matches_counting_them_a
     store.add(_record("bell", [BELL], start + timedelta(hours=1), origin=Origin(kind=OriginKind.SYSTEM)))
     store.add(_record("family", [], start + timedelta(hours=2), group="notify.family"))
     store.add_inner_call("family", Call("notify.phone_anna", [ANNA], "c1"))
+    store.add_inner_call("family", Call("notify.phone_ben", [BEN], "c2"))
+    store.mark_failed("family", "notify.phone_ben", "Error sending notification to Ben")
+    store.mark_failed("a0", None, "Chat not found")
     await store.async_flush()
     await store.async_add_answer("notify", Answer(action="CLOSE", time=dt_util.utcnow(), user_id="user-ben"))
-    expected = {user: await _counts(store, user) for user in (None, "user-anna", "user-ben")}
+    expected = {user: await _counts(store, user, failed=True) for user in (None, "user-anna", "user-ben")}
     await store.async_close()
 
     connection = sqlite3.connect(tmp_path / "journal.db")
@@ -218,7 +221,7 @@ async def test_filling_the_counts_of_older_notifications_matches_counting_them_a
     store = NotificationStore(str(tmp_path / "journal.db"))
     await store.async_open()
     try:
-        assert {user: await _counts(store, user) for user in (None, "user-anna", "user-ben")} == expected
+        assert {user: await _counts(store, user, failed=True) for user in (None, "user-anna", "user-ben")} == expected
     finally:
         await store.async_close()
 
