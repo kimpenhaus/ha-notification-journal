@@ -4,7 +4,9 @@ labels: [bug]
 body:
   - type: markdown
     attributes:
-      value: Please leave out personal data such as names, addresses and the texts of real notifications; replace them with made-up ones.
+      value: >-
+        Questions and help with setup go to the [discussions](https://github.com/kimpenhaus/ha-notification-journal/discussions/categories/q-a).
+        Please leave out personal data such as names, addresses and the texts of real notifications; replace them with made-up ones.
   - type: textarea
     id: what
     attributes:
