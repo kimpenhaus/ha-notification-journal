@@ -191,9 +191,8 @@ export class NotificationJournalPanel extends LitElement {
   private readonly _sign: Signer = (path) => signPath(this._hass!.connection, path);
   /** The subscription ended with the old connection, and what was sent meanwhile never arrived. */
   private readonly _reconnected = () => {
-    this._unsubscribe = undefined;
-    this._start();
-    if (this._screen === "statistics") void this._statistics?.refresh();
+    this._unsubscribeNow();
+    this._subscribe(true);
   };
   private readonly _resend = (recordId: string) =>
     this._hass!.connection.sendMessagePromise({ type: "notification_journal/resend", record_id: recordId });
@@ -214,6 +213,7 @@ export class NotificationJournalPanel extends LitElement {
       this.requestUpdate();
     }
     if (!previous && this.isConnected) this._start();
+    else if (this._connection && previous?.connection !== hass.connection) this._reconnected();
   }
 
   override connectedCallback(): void {
@@ -246,11 +246,15 @@ export class NotificationJournalPanel extends LitElement {
     return Boolean(this._hass?.user?.is_admin);
   }
 
-  /** Subscribes and loads; a subscription refused, as while Home Assistant starts, is tried again. */
   private _start(): void {
     if (this._unsubscribe || !this._hass) return;
+    this._subscribe(false);
+    this._refresh();
+  }
+
+  private _subscribe(catchUp: boolean): void {
     window.clearTimeout(this._subscribeTimer);
-    const connection = this._hass.connection;
+    const connection = this._hass!.connection;
     if (this._connection !== connection) {
       this._connection?.removeEventListener("ready", this._reconnected);
       connection.addEventListener("ready", this._reconnected);
@@ -262,18 +266,31 @@ export class NotificationJournalPanel extends LitElement {
       { resubscribe: false },
     );
     this._unsubscribe = subscription;
-    subscription.catch(() => {
-      if (this._unsubscribe !== subscription) return;
-      this._unsubscribe = undefined;
-      this._subscribeTimer = window.setTimeout(() => this._start(), SUBSCRIBE_RETRY);
-    });
-    this._refresh();
+    subscription.then(
+      () => {
+        if (catchUp && this._unsubscribe === subscription) this._catchUp();
+      },
+      () => {
+        if (this._unsubscribe !== subscription) return;
+        this._unsubscribe = undefined;
+        this._subscribeTimer = window.setTimeout(() => this._subscribe(true), SUBSCRIBE_RETRY);
+      },
+    );
   }
 
-  private _stop(): void {
+  private _catchUp(): void {
+    this._refresh();
+    if (this._screen === "statistics") void this._statistics?.refresh();
+  }
+
+  private _unsubscribeNow(): void {
     const unsubscribe = this._unsubscribe;
     this._unsubscribe = undefined;
     unsubscribe?.then((stop) => stop()).catch(() => undefined);
+  }
+
+  private _stop(): void {
+    this._unsubscribeNow();
     this._connection?.removeEventListener("ready", this._reconnected);
     this._connection = undefined;
     window.clearTimeout(this._subscribeTimer);
