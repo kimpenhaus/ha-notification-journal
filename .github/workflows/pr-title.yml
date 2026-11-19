@@ -31,9 +31,9 @@ jobs:
             refactor
             build
             style
-          # Every title names the part it changes, e.g. "feat(statistics): …". Add new parts here. docs, ci and
-          # tooling are for the docs besides the README, the CI jobs and the build and lint tools. There is no
-          # scope for tests: a repair of them is "test(<part>): …", not "fix(tests): …" in the changelog.
+          # Every title names the part it changes, e.g. "feat(statistics): …". Add new parts here.
+          # docs: docs other than the README; ci: the CI jobs; tooling: build and lint tools.
+          # No scope for tests: a repair of them is "test(<part>): …", not "fix(tests): …".
           requireScope: true
           scopes: |
             panel
