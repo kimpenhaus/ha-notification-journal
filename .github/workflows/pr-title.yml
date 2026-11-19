@@ -32,7 +32,7 @@ jobs:
             build
             style
           # Every title names the part it changes, e.g. "feat(statistics): …". Add new parts here. There is
-          # no scope for tests or CI: a change to them is "test: …" or "ci: …", never a "fix" in the changelog.
+          # no scope for tests or CI, so a repair of them cannot land in the changelog as "fix(tests): …".
           requireScope: true
           scopes: |
             panel
@@ -48,5 +48,6 @@ jobs:
             screenshots
             release
             deps
-          subjectPattern: ^[a-z].*[^.]$
-          subjectPatternError: The summary "{subject}" starts with a lowercase letter and ends without a period.
+          # A digit for release-please's "chore(release): 0.5.0".
+          subjectPattern: ^[a-z0-9].*[^.]$
+          subjectPatternError: The summary "{subject}" must start with a lowercase letter and must not end with a period.
