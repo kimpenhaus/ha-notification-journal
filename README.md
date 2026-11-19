@@ -1,4 +1,4 @@
-# Notification Journal
+# <img src="custom_components/notification_journal/brand/icon.svg" alt="" width="48" align="absmiddle"> Notification Journal
 
 A Home Assistant integration that keeps a journal of every notification your home sends and shows it in a sidebar panel: what was sent, to whom, by which automation or script, and when.
 
