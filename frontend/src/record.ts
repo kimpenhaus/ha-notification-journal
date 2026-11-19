@@ -168,6 +168,7 @@ export class NotificationJournalRecord extends LitElement {
     resend: { attribute: false },
     _resending: { state: true },
     _resendError: { state: true },
+    _sentAgain: { state: true },
     selectable: { type: Boolean },
     selected: { type: Boolean },
   };
@@ -191,6 +192,7 @@ export class NotificationJournalRecord extends LitElement {
   declare resend: ((recordId: string) => Promise<unknown>) | undefined;
   declare _resending: boolean;
   declare _resendError: string | undefined;
+  declare _sentAgain: boolean;
   private _found: Media = {};
   private _frame: Element | undefined;
   declare selectable: boolean;
@@ -207,6 +209,7 @@ export class NotificationJournalRecord extends LitElement {
     this._playing = false;
     this._viewing = false;
     this._resending = false;
+    this._sentAgain = false;
     this._failed = new Set();
     this._sources = new Map();
     this.selectable = false;
@@ -654,22 +657,27 @@ export class NotificationJournalRecord extends LitElement {
   private _sendAgain(): TemplateResult | typeof nothing {
     const record = this.record;
     const resend = this.resend;
-    if (record.resent_from) return html`<p class="status-note">${this.localize("resent_note")}</p>`;
+    const note = record.resent_from ? html`<p class="status-note">${this.localize("resent_note")}</p>` : nothing;
     if (!resend || record.source !== "notify" || (record.status !== "failed" && record.status !== "partial")) {
-      return nothing;
+      return note;
     }
+    if (this._sentAgain)
+      return html`${note}
+        <p class="status-note">${this.localize("resent_done")}</p>`;
     const send = async () => {
       this._resending = true;
       this._resendError = undefined;
       try {
         await resend(record.id);
+        this._sentAgain = true;
       } catch (error) {
         this._resendError = this.localize("resend_failed", { message: errorMessage(error) });
       } finally {
         this._resending = false;
       }
     };
-    return html`<button class="resend" ?disabled=${this._resending} @click=${send}>
+    return html`${note}
+      <button class="resend" ?disabled=${this._resending} @click=${send}>
         ${icon(mdiReplay)}${this.localize(this._resending ? "resending" : "resend")}
       </button>
       ${this._resendError ? errorLine(this._resendError) : nothing}`;

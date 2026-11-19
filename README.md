@@ -77,9 +77,9 @@ Every card shows a status:
 | Replaced | Home Assistant replaced it under the bell with a newer one of the same ID. |
 | Failed | Sending failed, with Home Assistant's error: an action that raised it inside an automation or script (as its trace shows), or what the Companion app logs when a push fails (push server unreachable, timeout, rate limit), as it does not raise an error then. An action called from the developer tools that raises leaves no trace to read. |
 | Partly failed | A group whose members failed in part; the error is shown at each failed member. |
-
-Administrators can send a failed or partly failed notification again with *Send again*: Home Assistant calls the same action with the same text and data, buttons and tag included, for a group only to the members that failed. It is recorded as a new notification by hand that says it repeats a failed one.
 | Answered | Someone tapped one of its buttons in the Companion app. |
+
+Administrators can send a failed or partly failed notification again with *Send again*: Home Assistant calls the same action with the same text and data, buttons and tag included, for a group only to the members that failed, with what the group adds to their calls. Notify entities (`notify.send_message`) take text only, so they get title and message again. It is recorded as a new notification by hand that says it repeats a failed one; when the action fails again, that one is marked failed.
 
 Failed pushes of the Companion app are read from what it logs at *warning* and above; with its log level set higher (`logger:` in `configuration.yaml`), they stay *sent*.
 

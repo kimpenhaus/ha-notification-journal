@@ -72,6 +72,26 @@ def legacy_group_members(hass: HomeAssistant, service: str) -> list[str] | None:
     return None
 
 
+def member_defaults(
+    hass: HomeAssistant, group: str, member: str, seen: frozenset[str] = frozenset()
+) -> list[dict[str, Any]]:
+    """Return the data each legacy group on the way from a group to one of its members adds to the member's call,
+    the outer group first; empty when the member is not in the group."""
+    if group in seen:
+        return []
+    for platform, notify_service in _legacy_services(hass):
+        if platform != GROUP_PLATFORM or getattr(notify_service, "_service_name", None) != group:
+            continue
+        for entry in getattr(notify_service, "entities", []):
+            name = next((entry[key] for key in GROUP_MEMBER_KEYS if key in entry), None)
+            own = [entry["data"]] if isinstance(entry.get("data"), dict) else []
+            if name == member:
+                return own
+            if name and (inner := member_defaults(hass, name, member, seen | {group})):
+                return own + inner
+    return []
+
+
 def entity_group_members(hass: HomeAssistant, entity_id: str) -> list[str] | None:
     """Return the members of a notify group entity, or None if the entity is no group."""
     state = hass.states.get(entity_id)

@@ -19,7 +19,7 @@ from ..recipients import (
     legacy_group_members,
 )
 from ..store import NotificationStore
-from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, Listener, as_list, new_record, resending
+from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, Listener, as_list, new_record, resent_from
 
 GROUP_CALL_WINDOW = 5.0
 EVENT_NOTIFICATION_ACTION = "mobile_app_notification_action"
@@ -136,7 +136,7 @@ class NotifySource:
                     message=message,
                     started=event.time_fired_timestamp,
                     entity_group=service == SEND_MESSAGE,
-                    resent_from=resending.get(),
+                    resent_from=resent_from(),
                 )
             )
 
@@ -210,7 +210,7 @@ class NotifySource:
             and parent.members.issuperset(channels)
             and message == parent.message
             and event.time_fired_timestamp - parent.started < GROUP_CALL_WINDOW
-            and parent.resent_from == resending.get()
+            and parent.resent_from == resent_from()
         )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date, datetime, time, timedelta, tzinfo
 from typing import Any
 
@@ -17,8 +18,9 @@ from homeassistant.util import dt as dt_util
 from .const import CONF_NON_ADMIN_VISIBILITY, DEFAULT_OPTIONS, DOMAIN, SIGNAL_CHANGED, Visibility
 from .models import NotificationRecord, RecipientKind, Status
 from .origin import OriginNames, origin_key
-from .recipients import NOTIFY_DOMAIN, SEND_MESSAGE
-from .sources import ATTR_MESSAGE, ATTR_TITLE, resending
+from .recipients import NOTIFY_DOMAIN, SEND_MESSAGE, member_defaults
+from .sources import ATTR_MESSAGE, ATTR_TITLE, Resending, resending
+from .sources.notify import current_call
 from .statistics import FAILED, PERIOD_KINDS, period, summarize
 from .store import NotificationStore, Query
 
@@ -323,34 +325,60 @@ async def ws_resend(hass: HomeAssistant, connection: websocket_api.ActiveConnect
     if record.source != NOTIFY_DOMAIN or record.status not in FAILED:
         connection.send_error(msg["id"], websocket_api.ERR_NOT_SUPPORTED, "Only a failed notify notification")
         return
-    token = resending.set(record.id)
+    mark = Resending(record.id)
+    token = resending.set(mark)
+    errors = []
     try:
         for service, data in _calls_again(hass, record):
-            await hass.services.async_call(NOTIFY_DOMAIN, service, data, blocking=True, context=connection.context(msg))
-    except (HomeAssistantError, vol.Invalid) as err:
-        connection.send_error(msg["id"], websocket_api.ERR_HOME_ASSISTANT_ERROR, str(err))
-        return
+            current_call.set(None)
+            try:
+                await hass.services.async_call(
+                    NOTIFY_DOMAIN, service, data, blocking=True, context=connection.context(msg)
+                )
+            except (HomeAssistantError, vol.Invalid) as err:
+                errors.append(str(err))
+                if (sent := current_call.get()) is not None:
+                    store.mark_failed(sent.record_id, None, str(err))
     finally:
+        mark.active = False
         resending.reset(token)
+    if errors:
+        connection.send_error(msg["id"], websocket_api.ERR_HOME_ASSISTANT_ERROR, "; ".join(errors))
+        return
     connection.send_result(msg["id"])
 
 
 def _calls_again(hass: HomeAssistant, record: NotificationRecord) -> list[tuple[str, dict[str, Any]]]:
     """The notify calls that send a failed notification again: to each failed member of a group, else as it was.
 
-    A channel is a legacy action (notify.mobile_app_phone) or notify entities (send_message, which takes no data).
+    A channel is notify entities (send_message, which takes text only) or a legacy action, which gets the stored data
+    and, for a member of a legacy group, what the groups add to its calls.
     """
-    failed = [call.channel for call in record.inner_calls if call.error and not call.group]
+    failed = list(dict.fromkeys(call.channel for call in record.inner_calls if call.error and not call.group))
     text = {ATTR_MESSAGE: record.message, **({ATTR_TITLE: record.title} if record.title else {})}
     calls = []
     for channel in failed or [record.channel]:
         targets = channel.split(", ")
-        service = targets[0].removeprefix(f"{NOTIFY_DOMAIN}.")
-        if len(targets) == 1 and hass.services.has_service(NOTIFY_DOMAIN, service) and service != SEND_MESSAGE:
-            calls.append((service, {**text, **(record.data or {})}))
-        else:
+        if all(hass.states.get(target) is not None for target in targets):
             calls.append((SEND_MESSAGE, {**text, ATTR_ENTITY_ID: targets}))
+            continue
+        service = channel.removeprefix(f"{NOTIFY_DOMAIN}.")
+        data = {**text, **deepcopy(record.data or {})}
+        if failed and record.group:
+            for defaults in member_defaults(hass, record.group.removeprefix(f"{NOTIFY_DOMAIN}."), service):
+                _add_defaults(data, defaults)
+        calls.append((service, data))
     return calls
+
+
+def _add_defaults(data: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+    """Fill in what a notify group adds to a member's call, as the group does: the call's own values win."""
+    for key, value in defaults.items():
+        if isinstance(value, dict):
+            data[key] = _add_defaults(data.get(key) if isinstance(data.get(key), dict) else {}, value)
+        elif key not in data:
+            data[key] = value
+    return data
 
 
 @websocket_api.websocket_command(

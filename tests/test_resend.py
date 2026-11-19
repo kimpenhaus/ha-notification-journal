@@ -4,6 +4,7 @@ import logging
 
 import pytest
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
@@ -71,7 +72,8 @@ async def test_a_failed_notification_is_sent_again_by_hand(
 async def test_only_the_failed_members_of_a_group_get_it_again(
     hass: HomeAssistant, hass_ws_client: WebSocketGenerator, sent: dict[str, list[dict]]
 ) -> None:
-    group = {"platform": "group", "name": "family", "services": [{"action": "phone_anna"}, {"action": "phone_ben"}]}
+    anna = {"action": "phone_anna", "data": {"data": {"push": {"sound": "alarm"}}}}
+    group = {"platform": "group", "name": "family", "services": [anna, {"action": "phone_ben"}]}
     assert await async_setup_component(hass, "notify", {"notify": [group]})
     await hass.async_block_till_done()
     runtime = await _setup(hass)
@@ -85,6 +87,7 @@ async def test_only_the_failed_members_of_a_group_get_it_again(
     assert partial.status == Status.PARTIAL
     assert [(r.channel, r.resent_from) for r in records[1:]] == [("notify.phone_anna", partial.id)]
     assert (len(sent["phone_anna"]), len(sent["phone_ben"])) == (2, 1)
+    assert sent["phone_anna"][1] == {"message": "Dinner", "data": {"push": {"sound": "alarm"}}}
 
 
 async def test_a_sent_notification_is_not_sent_again(
@@ -114,3 +117,27 @@ async def test_only_administrators_send_again(
 
     assert result["error"]["code"] == "unauthorized"
     assert len(sent["phone_anna"]) == 1
+
+
+async def test_a_send_again_that_raises_fails_its_notification(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+) -> None:
+    tries: list[dict] = []
+
+    async def flaky(call: ServiceCall) -> None:
+        tries.append(dict(call.data))
+        if len(tries) == 1:
+            logging.getLogger(MOBILE_APP_LOGGER).error("Error sending notification to phone")
+        else:
+            raise HomeAssistantError("Push server unreachable")
+
+    hass.services.async_register("notify", "flaky", flaky)
+    runtime = await _setup(hass)
+    await hass.services.async_call("notify", "flaky", {"message": "Door open"}, blocking=True)
+    [failed] = await _records(hass, runtime)
+
+    result = await _resend(await hass_ws_client(hass), failed.id)
+    _, again = await _records(hass, runtime)
+
+    assert result["error"]["message"] == "Push server unreachable"
+    assert (again.status, again.error, again.resent_from) == (Status.FAILED, "Push server unreachable", failed.id)
