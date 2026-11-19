@@ -2,36 +2,12 @@ body:
   - type: markdown
     attributes:
       value: >-
-        Something that does not work as described is a [bug report](https://github.com/kimpenhaus/ha-notification-journal/issues/new/choose).
+        Something that does not work as described, or an idea, belongs in the [issues](https://github.com/kimpenhaus/ha-notification-journal/issues/new/choose).
         Please leave out personal data such as names, addresses and the texts of real notifications; replace them with made-up ones.
   - type: textarea
     id: question
     attributes:
       label: Your question
-      description: What you want to do or understand, and what you tried.
+      description: What you want to do or understand, what you tried, and your Home Assistant and Notification Journal versions.
     validations:
       required: true
-  - type: dropdown
-    id: part
-    attributes:
-      label: Part
-      options:
-        - Setup and options
-        - notify action
-        - Home Assistant's notifications (the bell)
-        - Speech announcement
-        - Telegram
-        - Panel
-        - Statistics
-        - Import from the recorder
-        - Other
-  - type: input
-    id: ha_version
-    attributes:
-      label: Home Assistant version
-      placeholder: "2026.11.1"
-  - type: input
-    id: version
-    attributes:
-      label: Notification Journal version
-      placeholder: "0.1.0"
