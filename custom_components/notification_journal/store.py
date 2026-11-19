@@ -36,15 +36,18 @@ from .models import (
 from .origin import origin_key
 from .statistics import (
     ALL,
+    COUNT_COLUMNS,
     COUNTS_SCHEMA,
     FAILED,
     SLOT,
     UPSERT_COUNTS,
+    ZERO,
     Counts,
     contributions,
     counts_of,
     difference,
     slot_of,
+    views_of,
     year_start,
 )
 
@@ -59,9 +62,13 @@ ORIGIN_KEY_OF_ROW = (
 )
 """`origin.origin_key` of a stored row, to fill `origin_key` in migration 5."""
 USERS_OF_ROW = "(SELECT group_concat(user_id, char(31)) FROM notification_users WHERE notification = n.rowid)"
-"""The users of a stored row `n`, separated by the unit separator."""
-FAILED_ROW = f"status IN ({', '.join(repr(str(status)) for status in FAILED)})"
-"""Whether a stored row failed in whole or in part."""
+"""Needs the row aliased as `n`; `_users_of` splits what it returns."""
+FAILED_ROW = f"status IN ({', '.join(f"'{status}'" for status in FAILED)})"
+
+
+def _users_of(value: str | None) -> list[str]:
+    return value.split("\x1f") if value else []
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notifications (
@@ -123,7 +130,7 @@ def _fill_counts(db: sqlite3.Connection) -> None:
                {FAILED_ROW}
            FROM notifications n ORDER BY time"""
     )
-    totals: defaultdict[tuple[str, int, str], list[int]] = defaultdict(lambda: [0, 0, 0, 0])
+    totals: defaultdict[tuple[str, int, str], list[int]] = defaultdict(lambda: list(ZERO))
     current = None
     for sent, key, buttons, answers, users, failed in rows:
         slot = slot_of(sent)
@@ -132,7 +139,7 @@ def _fill_counts(db: sqlite3.Connection) -> None:
             totals.clear()
             current = slot
         stored_answers = [answer_from_dict(a) for a in json.loads(answers)]
-        views = contributions(users.split("\x1f") if users else [], bool(buttons), stored_answers, bool(failed))
+        views = contributions(_users_of(users), bool(buttons), stored_answers, bool(failed))
         for view, counts in views.items():
             total = totals[(view, slot, key)]
             for index, value in enumerate(counts):
@@ -141,10 +148,7 @@ def _fill_counts(db: sqlite3.Connection) -> None:
 
 
 def _count_failed(db: sqlite3.Connection) -> None:
-    """Add the notifications already marked failed to counts that had no column for them yet.
-
-    A journal older than version 5 got the counts with that column, already filled, in the step to version 5.
-    """
+    """A journal older than version 5 got the counts with this column, already filled, in the step to version 5."""
     if "failed" in {row[1] for row in db.execute("PRAGMA table_info(notification_counts)")}:
         return
     db.execute("ALTER TABLE notification_counts ADD COLUMN failed INTEGER NOT NULL DEFAULT 0")
@@ -152,9 +156,13 @@ def _count_failed(db: sqlite3.Connection) -> None:
     for sent, key, users in db.execute(
         f"SELECT time, origin_key, {USERS_OF_ROW} FROM notifications n WHERE {FAILED_ROW}"
     ):
-        for view in contributions(users.split("\x1f") if users else [], False, []):
+        for view in views_of(_users_of(users)):
             failed[(view, slot_of(sent), key)] += 1
-    db.executemany(UPSERT_COUNTS, [(*row, 0, 0, 0, count) for row, count in failed.items()])
+    column = COUNT_COLUMNS.index("failed")
+    db.executemany(
+        UPSERT_COUNTS,
+        [(*row, *(count if i == column else 0 for i in range(len(ZERO)))) for row, count in failed.items()],
+    )
 
 
 Migration = str | Callable[[sqlite3.Connection], None]
@@ -678,14 +686,14 @@ class NotificationStore:
 
     def _update_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
         db = self._db()
-        before = self._get(record_id)
+        if (before := self._get(record_id)) is None:
+            return
         with db:
             db.execute(
                 "UPDATE notifications SET status = ?, status_time = ?, status_by = ? WHERE id = ?",
                 (status.value, time.timestamp(), json.dumps(asdict(by)) if by else None, record_id),
             )
-            if before is not None:
-                self._recount(db, before, replace(before, status=status))
+            self._recount(db, before, replace(before, status=status))
 
     def _add_answer(self, source: str, answer: Answer) -> str | None:
         db = self._db()
@@ -856,7 +864,7 @@ class NotificationStore:
         view = f"user_id IN ({', '.join('?' * len(users))})"
         within = f"FROM notification_counts WHERE {view} AND slot >= ? AND slot < ?"
         rows = db.execute(
-            f"SELECT slot, origin, sum(notifications), sum(with_buttons), sum(answered), sum(failed) {within} "
+            f"SELECT slot, origin, {', '.join(f'sum({column})' for column in COUNT_COLUMNS)} {within} "
             "GROUP BY slot, origin",
             [*users, *current],
         ).fetchall()

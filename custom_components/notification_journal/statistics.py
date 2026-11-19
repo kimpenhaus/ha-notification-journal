@@ -49,18 +49,18 @@ COUNTS_SCHEMA = (
     "CREATE INDEX IF NOT EXISTS notification_counts_slot ON notification_counts (slot)",
 )
 
-UPSERT_COUNTS = """
-INSERT INTO notification_counts (user_id, slot, origin, notifications, with_buttons, answered, failed)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+COUNT_COLUMNS = ("notifications", "with_buttons", "answered", "failed")
+"""What a row counts, in this order everywhere: notifications, with buttons, answered, failed in whole or in part."""
+
+UPSERT_COUNTS = f"""
+INSERT INTO notification_counts (user_id, slot, origin, {", ".join(COUNT_COLUMNS)})
+VALUES (?, ?, ?, {", ".join("?" * len(COUNT_COLUMNS))})
 ON CONFLICT (user_id, slot, origin) DO UPDATE SET
-    notifications = notifications + excluded.notifications,
-    with_buttons = with_buttons + excluded.with_buttons,
-    answered = answered + excluded.answered,
-    failed = failed + excluded.failed
+    {", ".join(f"{column} = {column} + excluded.{column}" for column in COUNT_COLUMNS)}
 """
 
-Counts = tuple[int, int, int, int]
-"""notifications, with buttons, answered, failed in whole or in part."""
+Counts = tuple[int, ...]
+ZERO: Counts = (0,) * len(COUNT_COLUMNS)
 
 
 def slot_of(stamp: float) -> int:
@@ -74,20 +74,23 @@ def has_buttons(data: dict[str, Any] | None) -> bool:
     return isinstance(inner, dict) and bool(inner.get("actions"))
 
 
-def contributions(
-    users: Iterable[str], buttons: bool, answers: list[Answer], failed: bool = False
-) -> dict[str, Counts]:
+def views_of(users: Iterable[str]) -> set[str]:
+    """Return the views a notification counts for: ALL, and its users, or EVERYONE alone once it reached everyone."""
+    users = set(users)
+    return {ALL} | ({EVERYONE} if EVERYONE in users else users)
+
+
+def contributions(users: Iterable[str], buttons: bool, answers: list[Answer], failed: bool) -> dict[str, Counts]:
     """Return what one notification adds to the rows of each view it counts for.
 
-    Besides ALL, those are its users, or EVERYONE alone once it reached everyone. A user's row counts only that
-    user's answer, the same as the panel shows; EVERYONE's row counts none, as nobody may see another user's answer.
+    A user's row counts only that user's answer, the same as the panel shows; EVERYONE's row counts none, as nobody
+    may see another user's answer.
     """
-    users = set(users)
     answered_by = {answer.user_id for answer in answers}
-    result: dict[str, Counts] = {ALL: (1, int(buttons), int(bool(answers)), int(failed))}
-    for view in {EVERYONE} if EVERYONE in users else users:
-        result[view] = (1, int(buttons), int(view in answered_by), int(failed))
-    return result
+    return {
+        view: (1, int(buttons), int(bool(answers) if view == ALL else view in answered_by), int(failed))
+        for view in views_of(users)
+    }
 
 
 def counts_of(record: NotificationRecord | None) -> dict[str, Counts]:
@@ -101,10 +104,9 @@ def difference(before: dict[str, Counts], after: dict[str, Counts]) -> dict[str,
     """Return what changes in each view's row when a notification's contributions change."""
     result = {}
     for view in before.keys() | after.keys():
-        old = before.get(view, (0, 0, 0, 0))
-        new = after.get(view, (0, 0, 0, 0))
+        old, new = before.get(view, ZERO), after.get(view, ZERO)
         if old != new:
-            result[view] = (new[0] - old[0], new[1] - old[1], new[2] - old[2], new[3] - old[3])
+            result[view] = tuple(n - o for n, o in zip(new, old, strict=True))
     return result
 
 

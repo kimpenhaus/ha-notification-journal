@@ -94,7 +94,6 @@
     const random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
     const heatmap = Array.from({ length: 7 }, () => Array(24).fill(0));
     const result = origins.map(([key, name]) => ({ key, name, notifications: 0, previous: 0, with_buttons: 0, answered: 0, failed: 0, previous_failed: 0, bursts: 0, night: 0 }));
-    // Sam's phone missed a push now and then: laundry and rain warnings, fewer than the week before.
     const failures = { "automation.laundry_done": [2, 3], "automation.rain_warning": [1, 2] };
     const buckets = Array.from({ length: 7 }, (_, day) => ({ start: new Date(monday.getTime() + day * 86400000).toISOString(), counts: {} }));
     const now = new Date();

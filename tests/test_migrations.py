@@ -9,11 +9,9 @@ from pathlib import Path
 import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.notification_journal.const import DATABASE_FILE, DEFAULT_OPTIONS, DOMAIN
-from custom_components.notification_journal.models import NotificationRecord, Origin, OriginKind
 from custom_components.notification_journal.store import (
     MIGRATION_COPY_DAYS,
     SCHEMA_VERSION,
@@ -66,10 +64,10 @@ def _columns(path: Path) -> set[str]:
         connection.close()
 
 
-def _counts(path: Path) -> list[tuple[str, str, int]]:
+def _counts(path: Path) -> list[tuple[str, str, int, int]]:
     connection = sqlite3.connect(path)
     try:
-        return connection.execute("SELECT user_id, origin, notifications FROM notification_counts").fetchall()
+        return connection.execute("SELECT user_id, origin, notifications, failed FROM notification_counts").fetchall()
     finally:
         connection.close()
 
@@ -111,7 +109,7 @@ async def test_old_database_is_migrated_after_a_backup(tmp_path: Path, version: 
     assert records[0].answers == []
     assert _version(path) == SCHEMA_VERSION
     assert {"source_ref", "status_time", "status_by", "answers", "origin_key"} <= _columns(path)
-    assert _counts(path) == [("", "unknown", 1)]
+    assert _counts(path) == [("", "unknown", 1, 0)]
     backup = tmp_path / f"old.db.bak-v{version}"
     assert _version(backup) == version
     assert "source_ref" not in _columns(backup)
@@ -234,41 +232,17 @@ async def test_other_files_are_left_alone(tmp_path: Path) -> None:
 
 async def test_failed_notifications_count_after_the_step_to_version_6(tmp_path: Path) -> None:
     path = tmp_path / "v5.db"
-    store = NotificationStore(str(path))
-    await store.async_open()
-    store.add(
-        NotificationRecord(
-            id="lost",
-            time=dt_util.utcnow(),
-            source="notify",
-            channel="notify.phone",
-            title=None,
-            message="Lost",
-            data=None,
-            recipients=[],
-            origin=Origin(kind=OriginKind.UNKNOWN),
-            context_id="c",
-        )
-    )
-    store.mark_failed("lost", None, "Chat not found")
-    await store.async_close()
+    _old_database(path, 2, status="failed")
+    await _open_and_close(path)
     connection = sqlite3.connect(path)
     with connection:
         connection.execute("ALTER TABLE notification_counts DROP COLUMN failed")
         connection.execute("PRAGMA user_version = 5")
     connection.close()
 
-    store = NotificationStore(str(path))
-    await store.async_open()
-    await store.async_close()
+    await _open_and_close(path)
 
-    connection = sqlite3.connect(path)
-    try:
-        assert connection.execute("SELECT user_id, notifications, failed FROM notification_counts").fetchall() == [
-            ("", 1, 1)
-        ]
-    finally:
-        connection.close()
+    assert _counts(path) == [("", "unknown", 1, 1)]
     assert _version(path) == SCHEMA_VERSION
 
 
@@ -276,14 +250,6 @@ async def test_a_failed_notification_of_an_old_journal_counts_once(tmp_path: Pat
     path = tmp_path / "old.db"
     _old_database(path, 2, status="failed")
 
-    store = NotificationStore(str(path))
-    await store.async_open()
-    await store.async_close()
+    await _open_and_close(path)
 
-    connection = sqlite3.connect(path)
-    try:
-        assert connection.execute("SELECT user_id, notifications, failed FROM notification_counts").fetchall() == [
-            ("", 1, 1)
-        ]
-    finally:
-        connection.close()
+    assert _counts(path) == [("", "unknown", 1, 1)]

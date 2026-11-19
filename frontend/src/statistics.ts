@@ -357,6 +357,10 @@ export class NotificationJournalStatistics extends LitElement {
     const night = this._top(data, "night");
     const bursts = this._top(data, "bursts");
     const failed = this._top(data, "failed");
+    const compared = (current: number, previous: number) =>
+      data.comparable
+        ? localize(`compare_${data.period}`, { change: this._change(true, current, previous) })
+        : localize("no_comparison");
     const tile = (label: string, value: string, note: string, title?: string) =>
       html`<div class="stats-tile" title=${title ?? nothing}>
         <span class="tile-label">${label}</span>
@@ -367,9 +371,7 @@ export class NotificationJournalStatistics extends LitElement {
       ${tile(
         localize("tile_notifications"),
         this._number(totals.notifications),
-        data.comparable
-          ? localize(`compare_${data.period}`, { change: this._change(true, totals.notifications, totals.previous) })
-          : localize("no_comparison"),
+        compared(totals.notifications, totals.previous),
       )}
       ${tile(
         localize("tile_answered"),
@@ -395,9 +397,7 @@ export class NotificationJournalStatistics extends LitElement {
       ${tile(
         localize("tile_failed"),
         this._number(totals.failed),
-        data.comparable
-          ? localize(`compare_${data.period}`, { change: this._change(true, totals.failed, totals.previous_failed) })
-          : localize("no_comparison"),
+        compared(totals.failed, totals.previous_failed),
         failed ? localize("mostly", { name: failed }) : undefined,
       )}
     </div>`;
