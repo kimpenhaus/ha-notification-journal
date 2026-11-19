@@ -9,9 +9,11 @@ from pathlib import Path
 import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.notification_journal.const import DATABASE_FILE, DEFAULT_OPTIONS, DOMAIN
+from custom_components.notification_journal.models import NotificationRecord, Origin, OriginKind
 from custom_components.notification_journal.store import (
     MIGRATION_COPY_DAYS,
     SCHEMA_VERSION,
@@ -228,3 +230,43 @@ async def test_other_files_are_left_alone(tmp_path: Path) -> None:
     await _open_and_close(path)
 
     assert all(other.exists() for other in others)
+
+
+async def test_failed_notifications_count_after_the_step_to_version_6(tmp_path: Path) -> None:
+    path = tmp_path / "v5.db"
+    store = NotificationStore(str(path))
+    await store.async_open()
+    store.add(
+        NotificationRecord(
+            id="lost",
+            time=dt_util.utcnow(),
+            source="notify",
+            channel="notify.phone",
+            title=None,
+            message="Lost",
+            data=None,
+            recipients=[],
+            origin=Origin(kind=OriginKind.UNKNOWN),
+            context_id="c",
+        )
+    )
+    store.mark_failed("lost", None, "Chat not found")
+    await store.async_close()
+    connection = sqlite3.connect(path)
+    with connection:
+        connection.execute("ALTER TABLE notification_counts DROP COLUMN failed")
+        connection.execute("PRAGMA user_version = 5")
+    connection.close()
+
+    store = NotificationStore(str(path))
+    await store.async_open()
+    await store.async_close()
+
+    connection = sqlite3.connect(path)
+    try:
+        assert connection.execute("SELECT user_id, notifications, failed FROM notification_counts").fetchall() == [
+            ("", 1, 1)
+        ]
+    finally:
+        connection.close()
+    assert _version(path) == SCHEMA_VERSION

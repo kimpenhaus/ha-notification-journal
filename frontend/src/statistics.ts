@@ -343,7 +343,7 @@ export class NotificationJournalStatistics extends LitElement {
   }
 
   /** The name of the origin with the most of a field, if any has some. */
-  private _top(data: Statistics, field: "night" | "bursts"): string | undefined {
+  private _top(data: Statistics, field: "night" | "bursts" | "failed"): string | undefined {
     const top = data.origins.reduce<OriginStatistics | undefined>(
       (best, origin) => (origin[field] > (best?.[field] ?? 0) ? origin : best),
       undefined,
@@ -356,6 +356,7 @@ export class NotificationJournalStatistics extends LitElement {
     const totals = data.totals;
     const night = this._top(data, "night");
     const bursts = this._top(data, "bursts");
+    const failed = this._top(data, "failed");
     const tile = (label: string, value: string, note: string, title?: string) =>
       html`<div class="stats-tile" title=${title ?? nothing}>
         <span class="tile-label">${label}</span>
@@ -390,6 +391,14 @@ export class NotificationJournalStatistics extends LitElement {
         this._number(totals.bursts),
         bursts ? localize("mostly", { name: bursts }) : localize("bursts_hint"),
         localize("bursts_hint"),
+      )}
+      ${tile(
+        localize("tile_failed"),
+        this._number(totals.failed),
+        data.comparable
+          ? localize(`compare_${data.period}`, { change: this._change(true, totals.failed, totals.previous_failed) })
+          : localize("no_comparison"),
+        failed ? localize("mostly", { name: failed }) : undefined,
       )}
     </div>`;
   }
