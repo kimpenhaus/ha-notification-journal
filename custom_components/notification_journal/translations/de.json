@@ -78,6 +78,76 @@
         "own": "Die an sie geschickten Benachrichtigungen und die Glocke",
         "none": "Nichts"
       }
+    },
+    "query_status": {
+      "options": {
+        "failed": "Fehlgeschlagen",
+        "answered": "Beantwortet"
+      }
+    }
+  },
+  "device": {
+    "journal": {
+      "name": "Benachrichtigungsverlauf"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "notifications_today": {
+        "name": "Benachrichtigungen heute"
+      },
+      "failed_today": {
+        "name": "Heute fehlgeschlagen"
+      }
+    }
+  },
+  "exceptions": {
+    "not_loaded": {
+      "message": "Der Benachrichtigungsverlauf ist nicht eingerichtet."
+    }
+  },
+  "services": {
+    "query": {
+      "name": "Abfragen",
+      "description": "Gibt die aufgezeichneten Benachrichtigungen, die zu den Filtern passen, als Antwortdaten zurück, die neuesten zuerst, wenn nicht anders gewünscht. Ruft ein Benutzer ohne Administratorrechte sie auf, nur was das Panel ihm zeigt.",
+      "fields": {
+        "text": {
+          "name": "Text",
+          "description": "Wörter in Titel, Nachricht, Empfängern oder Auslöser; jedes Wort als Wortanfang."
+        },
+        "channel": {
+          "name": "Kanal",
+          "description": "Die notify-Aktion, notify-Entität oder Gruppe, an die die Benachrichtigungen gingen."
+        },
+        "origin": {
+          "name": "Auslöser",
+          "description": "Die Automation oder das Skript, das sie gesendet hat, `integration.` gefolgt von der Domain einer Integration, oder `user`, `system` oder `unknown`."
+        },
+        "status": {
+          "name": "Status",
+          "description": "Nur fehlgeschlagene Benachrichtigungen (ganz oder teilweise) oder nur beantwortete."
+        },
+        "tag": {
+          "name": "Tag",
+          "description": "Das Tag der Companion-App, mit dem die Benachrichtigungen gesendet wurden."
+        },
+        "since": {
+          "name": "Seit",
+          "description": "Nur Benachrichtigungen, die zu oder nach diesem Zeitpunkt gesendet wurden."
+        },
+        "until": {
+          "name": "Bis",
+          "description": "Nur Benachrichtigungen, die vor diesem Zeitpunkt gesendet wurden."
+        },
+        "limit": {
+          "name": "Anzahl",
+          "description": "Wie viele Benachrichtigungen zurückgegeben werden, höchstens 200."
+        },
+        "newest_first": {
+          "name": "Neueste zuerst",
+          "description": "Die neuesten Benachrichtigungen zuerst; aus für die ältesten zuerst."
+        }
+      }
     }
   }
 }

@@ -463,7 +463,7 @@ class NotificationStore:
     def mark_failed(self, record_id: str, channel: str | None, error: str) -> None:
         """Submit an error of a call: on the member of a group with that channel, which then failed in part or whole,
         else on the record; a channel of None fails the record unless its members already show what failed."""
-        self._submit(self._mark_failed, record_id, channel, error)
+        self._submit(self._mark_failed, record_id, channel, error, change="failed")
 
     def set_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
         """Submit a change of status, with when and by whom it happened."""
@@ -503,6 +503,10 @@ class NotificationStore:
         For administrators, or a user's view if user_id is given.
         """
         return await self._run(self._statistics, user_id, current, compared)
+
+    async def async_counts_since(self, start: datetime) -> Counts:
+        """Return the counts of every notification sent since a moment on a quarter hour, such as a local midnight."""
+        return await self._run(self._counts_since, slot_of(start.timestamp()))
 
     async def async_forget_imported(self) -> None:
         """Delete what an import from the recorder added, with its counts, so it can run again from the start."""
@@ -962,6 +966,18 @@ class NotificationStore:
             kept_since=db.execute("SELECT min(time) FROM notifications").fetchone()[0],
             names=self._stored_names("SELECT value AS key FROM json_each(?)", [json.dumps(keys)]),
         )
+
+    def _counts_since(self, slot: int) -> Counts:
+        row = (
+            self._db()
+            .execute(
+                f"SELECT {', '.join(f'coalesce(sum({column}), 0)' for column in COUNT_COLUMNS)} "
+                "FROM notification_counts WHERE user_id = ? AND slot >= ?",
+                (ALL, slot),
+            )
+            .fetchone()
+        )
+        return tuple(row)
 
     def _purge(self, cutoff: float, max_entries: int, counts_cutoff: float) -> int:
         db = self._db()

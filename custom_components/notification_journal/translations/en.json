@@ -78,6 +78,76 @@
         "own": "The notifications sent to them and the bell",
         "none": "Nothing"
       }
+    },
+    "query_status": {
+      "options": {
+        "failed": "Failed",
+        "answered": "Answered"
+      }
+    }
+  },
+  "device": {
+    "journal": {
+      "name": "Notification Journal"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "notifications_today": {
+        "name": "Notifications today"
+      },
+      "failed_today": {
+        "name": "Failed today"
+      }
+    }
+  },
+  "exceptions": {
+    "not_loaded": {
+      "message": "Notification Journal is not set up."
+    }
+  },
+  "services": {
+    "query": {
+      "name": "Query",
+      "description": "Returns the recorded notifications that match the filters as response data, newest first unless asked otherwise. Called by a user who is no administrator, only what the panel shows them.",
+      "fields": {
+        "text": {
+          "name": "Text",
+          "description": "Words in the title, message, recipients or origin; each word as the start of a word."
+        },
+        "channel": {
+          "name": "Channel",
+          "description": "The notify action, notify entity or group the notifications went to."
+        },
+        "origin": {
+          "name": "Origin",
+          "description": "The automation or script that sent them, `integration.` followed by an integration's domain, or `user`, `system` or `unknown`."
+        },
+        "status": {
+          "name": "Status",
+          "description": "Only failed notifications (in whole or in part), or only answered ones."
+        },
+        "tag": {
+          "name": "Tag",
+          "description": "The Companion app's tag the notifications were sent with."
+        },
+        "since": {
+          "name": "Since",
+          "description": "Only notifications sent at or after this time."
+        },
+        "until": {
+          "name": "Until",
+          "description": "Only notifications sent before this time."
+        },
+        "limit": {
+          "name": "Limit",
+          "description": "How many notifications to return, at most 200."
+        },
+        "newest_first": {
+          "name": "Newest first",
+          "description": "Return the newest notifications first; off for the oldest first."
+        }
+      }
     }
   }
 }

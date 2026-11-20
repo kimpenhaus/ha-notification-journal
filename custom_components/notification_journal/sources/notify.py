@@ -21,7 +21,7 @@ from ..models import (
     NotificationRecord,
     Recipient,
     Status,
-    app_data,
+    tag_of,
 )
 from ..origin import resolve_origin
 from ..recipients import (
@@ -40,7 +40,6 @@ EVENT_NOTIFICATION_ACTION = "mobile_app_notification_action"
 """Fired by the Companion app when someone taps a button of a notification; its context carries their user."""
 ATTR_ACTION = "action"
 ATTR_REPLY_TEXT = "reply_text"
-ATTR_TAG = "tag"
 CLEAR_NOTIFICATION = "clear_notification"
 """The message that makes the Companion app remove the notification with the same tag."""
 COMMANDS = frozenset(
@@ -174,7 +173,7 @@ class NotifySource:
 
         members = self._group_members(service, channels)
         command = message in COMMANDS or PREFIXED_COMMAND.fullmatch(message) is not None
-        tag = None if excluded or command or message == SPOKEN_MESSAGE else _tag(data)
+        tag = None if excluded or command or message == SPOKEN_MESSAGE else tag_of(data)
         companion = companion_channels(self._hass) if tag is not None or command else frozenset()
         reached = companion.intersection(members if members is not None else channels)
         withdraw = bool(reached) and message == CLEAR_NOTIFICATION
@@ -288,12 +287,6 @@ class NotifySource:
             and message == parent.message
             and event.time_fired_timestamp - parent.started < GROUP_CALL_WINDOW
         )
-
-
-def _tag(data: dict[str, Any]) -> str | None:
-    """The Companion app's tag of a call (`data.tag`)."""
-    tag = app_data(data).get(ATTR_TAG)
-    return tag if isinstance(tag, str) and tag else None
 
 
 def _track(record_id: str, channels: list[str]) -> None:

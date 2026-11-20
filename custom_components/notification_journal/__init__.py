@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers import config_validation as cv
@@ -14,6 +15,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
 
+from .automations import async_register_services, event_data
 from .const import (
     CONF_EXCLUDED_CHANNELS,
     CONF_MAX_ENTRIES,
@@ -30,6 +32,8 @@ from .const import (
     DATABASE_FILE,
     DEFAULT_OPTIONS,
     DOMAIN,
+    EVENT_FAILED,
+    EVENT_RECORDED,
     SIGNAL_CHANGED,
     Visibility,
 )
@@ -43,9 +47,13 @@ from .sources.persistent import PersistentNotificationSource
 from .sources.speech import SpeechSource
 from .sources.telegram import TelegramSource
 from .store import NewerSchemaError, NotificationStore, remove_database
+from .today import TodayCounts
 from .traces import RunWatcher
 from .websocket_api import async_register
 
+PLATFORMS = [Platform.SENSOR]
+EVENTS = {"added": EVENT_RECORDED, "failed": EVENT_FAILED}
+"""The event fired for each change of the store that automations hear of; a failure reaches the panel as an update."""
 PURGE_INTERVAL = timedelta(days=1)
 IMPORT_BEFORE = "import_before"
 """Kept in the entry's data from first setup until the import from the recorder is done: up to when it reads."""
@@ -57,6 +65,8 @@ class RuntimeData:
     """What the integration holds while it is loaded."""
 
     store: NotificationStore
+    counts: TodayCounts
+    """Today's counts for the sensors."""
     stop: list[CALLBACK_TYPE] = field(default_factory=list)
     """What feeds the store: the sources, the import, the purge timer and the change forwarding, stopped before it
     closes."""
@@ -66,8 +76,9 @@ type NotificationJournalConfigEntry = ConfigEntry[RuntimeData]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Register the WebSocket commands and the panel's scripts."""
+    """Register the WebSocket commands, the actions and the panel's scripts."""
     async_register(hass)
+    async_register_services(hass)
     async_register_frontend(hass)
     return True
 
@@ -83,11 +94,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
         raise ConfigEntryError(str(err)) from err
     if created:
         hass.config_entries.async_update_entry(entry, data={**entry.data, IMPORT_BEFORE: dt_util.utcnow().timestamp()})
-    runtime = RuntimeData(store=store)
+    runtime = RuntimeData(store=store, counts=TodayCounts(hass, entry, store))
     try:
         sources = _start(hass, entry, store, runtime.stop, options)
         if options[CONF_RECORD_PERSISTENT]:
             runtime.stop.append(await PersistentNotificationSource(hass, store).async_start())
+        await runtime.counts.async_config_entry_first_refresh()
+        runtime.stop.extend(runtime.counts.follow())
     except Exception:
         _stop(runtime)
         await store.async_close()
@@ -100,6 +113,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
             "notification_journal import",
         )
         runtime.stop.append(importing.cancel)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     async_register_panel(
         hass,
@@ -113,8 +127,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: NotificationJournalConfi
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: NotificationJournalConfigEntry) -> bool:
-    """Unload the config entry: stop everything that writes to the store, then close it."""
+    """Unload the config entry: its sensors, everything that writes to the store, then the store."""
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        return False
     _stop(entry.runtime_data)
+    await entry.runtime_data.counts.async_shutdown()
     await entry.runtime_data.store.async_close()
     return True
 
@@ -163,14 +180,16 @@ def _start(
 
     async def _publish(change: str, record_id: str) -> None:
         record = None
-        if change in ("added", "updated"):
+        if change in ("added", "updated", "failed"):
             try:
                 record = await store.async_get(record_id)
             except RuntimeError:
                 return
             if record is None:
                 return
-        async_dispatcher_send(hass, SIGNAL_CHANGED, change, record_id, record)
+            if (event := EVENTS.get(change)) is not None:
+                hass.bus.async_fire(event, event_data(hass, record))
+        async_dispatcher_send(hass, SIGNAL_CHANGED, "updated" if change == "failed" else change, record_id, record)
 
     @callback
     def _changed(change: str, record_id: str) -> None:
