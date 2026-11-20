@@ -46,7 +46,7 @@ import type {
   Period,
   RecordEvent,
   StatisticsSelection,
-  Status,
+  StatusFilter,
   View,
 } from "./types";
 import { errorMessage, store, stored } from "./util";
@@ -57,7 +57,7 @@ const ARCHIVE_BATCH = 200;
 const SEARCH_DELAY = 300;
 const SUBSCRIBE_RETRY = 5000;
 const PERIODS: Record<Exclude<Period, "">, number> = { day: 1, week: 7, month: 30, quarter: 90 };
-const STATUSES: Status[] = ["sent", "failed", "partial", "dismissed", "replaced"];
+const STATUS_FILTERS: StatusFilter[] = ["failed", "answered"];
 const DEFAULT_FILTERS: Filters = {
   text: "",
   status: "",
@@ -922,7 +922,7 @@ export class NotificationJournalPanel extends LitElement {
             "status",
             localize("status_all"),
             html`<option value="" ?selected=${!filters.status}>${localize("status_all")}</option>
-              ${STATUSES.map(
+              ${STATUS_FILTERS.map(
                 (status) =>
                   html`<option value=${status} ?selected=${filters.status === status}>
                     ${localize(`status_${status}`)}

@@ -19,12 +19,12 @@ Home Assistant forgets a notification the moment it is sent. Notification Journa
 - **Shows the answers**: the buttons of an actionable notification in the Companion app, which one was tapped, by whom and when, and the text typed into a reply button. Everyone sees their own answers; administrators see all.
 - **Shows what failed**: a notification whose sending failed, with Home Assistant's error, and a group that failed in part, with the error at each member that failed. Administrators send it again to what failed with one click.
 - **Shows the media**: an image sent with a notification as a preview that opens in an overlay, a video with its image or first frame as a preview that plays in the card, audio as a link. Images that are gone fall back to a link.
-- **Tags**: the Companion app's tag of a notification as a chip; a click shows all notifications with that tag.
+- **Tags**: the Companion app's tag of a notification as a chip; a click shows all notifications with that tag. A newer notification with the same tag marks the one it replaced on the phone, `clear_notification` the one it withdrew.
 - **Shows who it reached**: notify groups are resolved into the people and devices behind them; a person's current name and picture are shown, and automations, scripts and integrations appear under their current name.
 - **Shows where it came from**: the automation or script that sent it, with a link to the exact trace of that run, the user who sent it by hand, or the custom integration that sent it from its own code.
 - **Two views**: a timeline by day, or grouped by automation; both sorted newest or oldest first, every day and group can be folded. The timeline lists every day with its number of notifications and opens with only the newest one expanded; a day's notifications load when it opens. With a filter set, every day is expanded and the list loads page by page.
 - **Statistics**: who notifies how much and when, by day, week, month or year: totals compared with the period before, the share of answered notifications with buttons, notifications at night, bursts (quarter hours with five or more from one origin) and failed notifications compared with the period before, a history by origin, a heatmap of weekday and hour, and a ranking of origins. A bar or an origin opens its notifications. The statistics outlast the retention of the notifications.
-- **Search and filters**: full-text search over title, message, recipients and origin; filters for status, origin, period and tag.
+- **Search and filters**: full-text search over title, message, recipients and origin; filters for failed or answered notifications, origin, period and tag.
 - **Archive**: select notifications and move them out of your view, as in Home Assistant's own lists; the archive is per person, others keep seeing them.
 - **Private by person**: administrators see everything; everybody else sees the notifications sent to them, the bell and spoken announcements. Telegram chats belong to no Home Assistant user, so only administrators see those.
 - **Starts with the past**: on first setup it imports what Home Assistant's recorder still holds (10 days by default): notify calls, spoken announcements, Telegram messages and the answers to buttons. The automation or script that sent them comes from the recorded context; a notification an integration sent shows as unknown, and the bell's notifications from before are not in the recorder.
@@ -75,10 +75,28 @@ Every card shows a status:
 | Sent | Home Assistant sent the notification. The Companion app does not report delivery, so *sent* is as far as Home Assistant knows. |
 | Open | A notification under the bell that is still there. |
 | Dismissed | Removed from the bell, with the time and who did it. |
-| Replaced | Home Assistant replaced it under the bell with a newer one of the same ID. |
+| Replaced | Home Assistant replaced it under the bell with a newer one of the same ID, or a newer notification with the same tag replaced it on the phones (see below). |
+| Withdrawn | `clear_notification` with its tag removed it from the phones (see below). |
 | Failed | Sending failed, with Home Assistant's error: an action that raised it inside an automation or script (as its trace shows), or what the Companion app logs when a push fails (push server unreachable, timeout, rate limit), as it does not raise an error then. An action called from the developer tools that raises leaves no trace to read. |
 | Partly failed | A group whose members failed in part; the error is shown at each failed member. |
 | Answered | Someone tapped one of its buttons in the Companion app. |
+
+The status filter offers what you look for: *Failed* (failed in whole or in part) and *Answered* (someone tapped a button; a user who sees only their own notifications gets those they answered). The other statuses show on the cards.
+
+### Tags
+
+The Companion app replaces a notification on a phone with a newer one of the same `tag`, and `message: clear_notification` with a `tag` removes it. The journal follows that for notifications to the Companion app that are still *sent*:
+
+- A newer notification with the same tag marks the earlier one *replaced*, with the time and the automation, script or user that sent the newer one.
+- `clear_notification` with a tag marks it *withdrawn*, with the time and who sent the command. The command itself is recorded only when it also reaches another service, such as a group with a Telegram chat, which gets it as text. Without a tag it removes nothing on the phone and is recorded as it is.
+- Only when every phone the earlier notification reached is among those the newer one or the command reaches: a notification to a group stays *sent* when only one member's phone gets the newer one, as it is still shown on the others.
+- A failed, partly failed or answered notification keeps its status; tapping a button removes a notification from the phone anyway.
+- Other notify services keep every notification *sent*, tag or not, and record `clear_notification` as it is; a group counts only its phones with the Companion app.
+- An excluded action or entity changes nothing in the journal, also not with a tag. A notification to a group is recorded without its excluded members, so a newer one with the same tag to the other members marks it *replaced*, although the excluded phone still shows it.
+- A newer notification or a `clear_notification` that fails after it was sent still counts: the earlier one stays *replaced* or *withdrawn*. A failed `clear_notification` is not recorded, so its error shows nowhere.
+- While the first setup imports from the recorder, a notification sent live with a tag cannot replace the older ones the import has not reached yet; those stay *sent*.
+
+A click on the tag of a card shows every notification with that tag, so you can follow what replaced what.
 
 Administrators can send a failed or partly failed notification again with *Send again*: Home Assistant calls the same action with the same text and data, buttons and tag included, for a group only to the members that failed, with what the group adds to their calls. Notify entities (`notify.send_message`) take text only, so they get title and message again. It is recorded as a new notification by hand that says it repeats a failed one; when the action fails again, that one is marked failed.
 
@@ -122,7 +140,7 @@ Each automation, script or integration with its notifications, folded or open.
 
 ### Failed
 
-A group notification that reached one phone and not the other: the error at the member that failed, and *Send again* for administrators.
+The status filter on *Failed*: a group notification that reached one phone and not the other, with the error at the member that failed and *Send again* for administrators.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/failed-nordic-dark.png">

@@ -1,4 +1,6 @@
-export type Status = "sent" | "delivered" | "failed" | "partial" | "dismissed" | "replaced";
+export type Status = "sent" | "delivered" | "failed" | "partial" | "dismissed" | "replaced" | "withdrawn";
+/** What the list can be limited to by status: failed in whole or in part, or answered. */
+export type StatusFilter = "failed" | "answered";
 export type RecipientKind = "person" | "entity" | "channel" | "everyone" | "speaker" | "chat";
 export type OriginKind = "automation" | "script" | "user" | "integration" | "system" | "unknown";
 
@@ -94,7 +96,7 @@ export type RecordEvent =
 
 export interface Filters {
   text: string;
-  status: Status | "";
+  status: StatusFilter | "";
   origin: string;
   /** The Companion app's tag, chosen by clicking it on a card. */
   tag: string;

@@ -37,6 +37,7 @@
       data: { data: { tag: "garden_animal", image: "/garden-fox.jpg", actions: [{ action: "SPRINKLER_ON", title: "Sprinkler on" }, { action: "LET_IT_BE", title: "Let it be" }] } },
       answers: [{ action: "LET_IT_BE", time: at(0, 16, 23), user_id: "user-sam", reply_text: null }],
     },
+    { ...base, ...family, id: "r15", time: at(0, 15, 2), source: "notify", channel: "notify.family", title: "Doorbell", message: "Someone is at the front door.", origin: automation("doorbell_ring", "Doorbell: ring"), data: { data: { tag: "doorbell" } }, status: "withdrawn", status_time: at(0, 15, 3), status_by: automation("doorbell_door_opened", "Doorbell: door opened") },
     {
       ...base, ...toAlex, id: "r2", time: at(0, 13, 24), source: "notify",
       title: "Car outside", message: "A car stopped in front of the house.", origin: street,
@@ -50,7 +51,7 @@
     { ...base, ...toSam, id: "r8", time: at(0, 7, 30), source: "notify", status: "failed", error: "Error sending notification to Sam's phone", title: "Weather", message: "Rain from 11:00 – the skylight is still open.", origin: automation("rain_warning", "Weather: rain warning") },
     { ...base, id: "r9", time: at(0, 3, 12), source: "persistent_notification", channel: "persistent_notification", title: "Login attempt failed", message: "Login attempt or request with invalid authentication from 192.168.1.23.", recipients: [everyone], origin: system, trace_path: null, source_ref: "http-login", status: "dismissed", status_time: at(0, 8, 2), status_by: byHand("user-alex") },
     { ...base, ...family, id: "r10", time: at(-1, 22, 30), source: "notify", channel: "notify.family", title: "Good night", message: "All windows are closed and the alarm is armed.", origin: { kind: "script", entity_id: "script.good_night", name: "Good night", trace_key: "script.good_night", run_id: "r10", user_id: null } },
-    { ...base, ...toAlex, id: "r11", time: at(-1, 18, 40), source: "notify", title: "Car outside", message: "A delivery van stopped in front of the house.", origin: street, data: { data: { tag: "street_vehicle" } } },
+    { ...base, ...toAlex, id: "r11", time: at(-1, 18, 40), source: "notify", title: "Car outside", message: "A delivery van stopped in front of the house.", origin: street, data: { data: { tag: "street_vehicle" } }, status: "replaced", status_time: at(0, 13, 24), status_by: street },
     { ...base, ...family, id: "r12", time: at(-1, 16, 5), source: "notify", channel: "notify.family", title: "Visitor in the garden", message: "A hedgehog is looking around the raised bed.", origin: garden, data: { data: { tag: "garden_animal", image: "/garden-hedgehog.jpg" } } },
     { ...base, id: "r13", time: at(-1, 14, 2), source: "persistent_notification", channel: "persistent_notification", title: "New devices discovered", message: "We discovered new devices on your network. [Check it out](/config/integrations/dashboard).", recipients: [everyone], origin: system, trace_path: null, source_ref: "config_entry_discovery" },
     { ...base, ...toSam, id: "r14", time: at(-1, 6, 48), source: "notify", title: "Visitor in the garden", message: "A cat is sitting on the terrace.", origin: garden, data: { data: { tag: "garden_animal" } } },

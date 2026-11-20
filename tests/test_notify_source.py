@@ -17,7 +17,7 @@ from custom_components.notification_journal.const import (
     DEFAULT_OPTIONS,
     DOMAIN,
 )
-from custom_components.notification_journal.models import NotificationRecord, OriginKind, RecipientKind
+from custom_components.notification_journal.models import NotificationRecord, OriginKind, RecipientKind, Status
 from custom_components.notification_journal.store import Query
 
 
@@ -366,3 +366,106 @@ async def test_answer_without_a_matching_button_is_dropped(hass: HomeAssistant, 
     await _answer(hass, anna)
 
     assert (await _only(runtime)).answers == []
+
+
+async def _statuses(runtime: RuntimeData) -> list[tuple[str, Status]]:
+    return [(r.message, r.status) for r in reversed(await _records(runtime))]
+
+
+@pytest.fixture
+def companion(hass: HomeAssistant, phones: list) -> list:
+    """Both phones are Companion apps."""
+    hass.data.setdefault("notify_services", {}).setdefault("mobile_app", []).append(
+        SimpleNamespace(registered_targets={"phone_anna": "webhook-anna", "phone_ben": "webhook-ben"})
+    )
+    return phones
+
+
+async def _send(hass: HomeAssistant, service: str, message: str, tag: str | None = "garage") -> None:
+    await hass.services.async_call("notify", service, {"message": message, "data": {"tag": tag}}, blocking=True)
+    await hass.async_block_till_done()
+
+
+async def test_tag_replaces_earlier_notification_on_the_same_device(hass: HomeAssistant, companion: list) -> None:
+    runtime = await _setup(hass)
+
+    await _send(hass, "phone_ben", "Door open")
+    await _send(hass, "phone_anna", "Door open")
+    await _send(hass, "phone_ben", "Door closed")
+
+    assert await _statuses(runtime) == [
+        ("Door open", Status.REPLACED),
+        ("Door open", Status.SENT),
+        ("Door closed", Status.SENT),
+    ]
+    first, _, newer = reversed(await _records(runtime))
+    assert (first.status_time, first.status_by) == (newer.time, newer.origin)
+
+
+async def test_tag_replaces_a_group_only_on_all_its_devices(hass: HomeAssistant, companion: list) -> None:
+    runtime = await _setup(hass)
+
+    await _send(hass, "family", "Dinner")
+    await _send(hass, "phone_anna", "Dinner soon")
+    assert await _statuses(runtime) == [("Dinner", Status.SENT), ("Dinner soon", Status.SENT)]
+
+    await _send(hass, "family", "Dinner now")
+    assert await _statuses(runtime) == [
+        ("Dinner", Status.REPLACED),
+        ("Dinner soon", Status.REPLACED),
+        ("Dinner now", Status.SENT),
+    ]
+
+
+async def test_clear_notification_withdraws_and_is_no_record(hass: HomeAssistant, companion: list) -> None:
+    runtime = await _setup(hass)
+
+    await _send(hass, "family", "Dinner")
+    await _send(hass, "phone_ben", "Door open")
+    await _send(hass, "family", "clear_notification")
+
+    assert len(companion) == 5
+    assert await _statuses(runtime) == [("Dinner", Status.WITHDRAWN), ("Door open", Status.WITHDRAWN)]
+
+
+async def test_clear_notification_without_tag_stays_a_record(hass: HomeAssistant, companion: list) -> None:
+    runtime = await _setup(hass)
+
+    await _send(hass, "phone_ben", "Door open")
+    await _send(hass, "phone_ben", "clear_notification", tag=None)
+
+    assert await _statuses(runtime) == [("Door open", Status.SENT), ("clear_notification", Status.SENT)]
+
+
+async def test_tag_of_an_excluded_channel_changes_nothing(hass: HomeAssistant, companion: list) -> None:
+    runtime = await _setup(hass, **{CONF_EXCLUDED_CHANNELS: ["notify.phone_ben"]})
+
+    await _send(hass, "family", "Dinner")
+    await _send(hass, "phone_ben", "clear_notification")
+
+    assert await _statuses(runtime) == [("Dinner", Status.SENT)]
+
+
+async def test_tag_counts_only_for_the_companion_app(hass: HomeAssistant, phones: list) -> None:
+    runtime = await _setup(hass)
+
+    await _send(hass, "phone_ben", "Door open")
+    await _send(hass, "phone_ben", "Door closed")
+    await _send(hass, "phone_ben", "clear_notification")
+
+    assert await _statuses(runtime) == [
+        ("Door open", Status.SENT),
+        ("Door closed", Status.SENT),
+        ("clear_notification", Status.SENT),
+    ]
+
+
+async def test_clear_notification_reaching_another_service_is_recorded(
+    hass: HomeAssistant, phones: list, anna: str
+) -> None:
+    runtime = await _setup(hass)
+
+    await _send(hass, "family", "Dinner")
+    await _send(hass, "family", "clear_notification")
+
+    assert await _statuses(runtime) == [("Dinner", Status.WITHDRAWN), ("clear_notification", Status.SENT)]

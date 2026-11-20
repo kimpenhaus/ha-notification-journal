@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, tzinfo
 from typing import Any, Literal, get_args
 
-from .models import EVERYONE, Answer, NotificationRecord, Status
+from .models import EVERYONE, Answer, NotificationRecord, Status, app_data
 
 ALL = ""
 """The user id of the rows that count every notification once, for administrators."""
@@ -70,8 +70,7 @@ def slot_of(stamp: float) -> int:
 
 def has_buttons(data: dict[str, Any] | None) -> bool:
     """Return whether a notification offered actionable buttons."""
-    inner = data.get("data") if isinstance(data, dict) else None
-    return isinstance(inner, dict) and bool(inner.get("actions"))
+    return bool(app_data(data).get("actions"))
 
 
 def views_of(users: Iterable[str]) -> set[str]:

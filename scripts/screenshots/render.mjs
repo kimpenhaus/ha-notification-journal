@@ -73,9 +73,9 @@ const byOrigin = async (page) => {
   await page.getByRole("button", { name: "Collapse all" }).click();
   await page.locator("button.section.group").nth(1).click();
 };
-const partlyFailed = async (page) => {
-  await page.locator("select:has(option[value=partial])").selectOption("partial");
-  await page.locator("notification-journal-record").nth(1).waitFor({ state: "detached" });
+const failed = async (page) => {
+  await page.locator("select:has(option[value=failed])").selectOption("failed");
+  await page.locator("notification-journal-record").nth(2).waitFor({ state: "detached" });
   await group(page);
 };
 const statistics = async (page) => {
@@ -92,7 +92,7 @@ for (const theme of ["light", "dark"]) {
   const query = `lang=en&theme=${theme}`;
   await shot(`timeline-${theme}`, query, { width: 1280, height: 1250 }, group);
   await shot(`automations-${theme}`, query, { width: 1280, height: 1100 }, byOrigin);
-  await shot(`failed-${theme}`, query, { width: 1280, height: 900 }, partlyFailed);
+  await shot(`failed-${theme}`, query, { width: 1280, height: 900 }, failed);
   await shot(`statistics-${theme}`, query, { width: 1280, height: 1400 }, statistics, statisticsEnd);
   await shot(`mobile-${theme}`, `${query}&narrow=1`, { width: 390, height: 844 }, async () => {}, null);
 

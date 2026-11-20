@@ -46,7 +46,7 @@
       const originKey = (o) => o.entity_id ?? (o.integration ? `integration.${o.integration}` : o.kind);
       const archive = new Set();
       const matches = (r, m) =>
-        (!m.status || r.status === m.status) && (!m.channel || r.channel === m.channel || r.group === m.channel) &&
+        (!m.status || (m.status === "failed" ? ["failed", "partial"].includes(r.status) : r.answers.length > 0)) && (!m.channel || r.channel === m.channel || r.group === m.channel) &&
         (!m.origin || originKey(r.origin) === m.origin) && (!m.tag || r.data?.data?.tag === m.tag) &&
         (!m.since || Date.parse(r.time) >= Date.parse(m.since)) && (!m.until || Date.parse(r.time) < Date.parse(m.until)) &&
         (!m.text || JSON.stringify([r.title, r.message, r.recipients]).toLowerCase().includes(m.text.toLowerCase()));
