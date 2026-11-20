@@ -13,6 +13,7 @@ from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta, tzinfo
 from enum import StrEnum
@@ -70,6 +71,9 @@ TAG_INDEX = (
     f"CREATE INDEX IF NOT EXISTS notifications_tag ON notifications ({TAG_OF_ROW}) WHERE {TAG_OF_ROW} IS NOT NULL"
 )
 FAILED_ROW = f"status IN ({', '.join(f"'{status}'" for status in FAILED)})"
+
+_batched: ContextVar[bool] = ContextVar("notification_journal_batched", default=False)
+"""Set inside async_batch: what is done in that context is reported once at the end, what runs beside it as usual."""
 
 
 def _users_of(value: str | None) -> list[str]:
@@ -397,7 +401,6 @@ class NotificationStore:
         self._listeners: list[Callable[[str, str], None]] = []
         self._on_add: list[Callable[[NotificationRecord], None]] = []
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._quiet = False
 
     async def async_open(self) -> bool:
         """Open the database and create the schema; return whether it was created, as on first setup."""
@@ -406,13 +409,13 @@ class NotificationStore:
 
     @asynccontextmanager
     async def async_batch(self) -> AsyncIterator[None]:
-        """Report no change one by one while inside, and one reload when leaving."""
-        self._quiet = True
+        """Report no change made inside one by one, and one reload when leaving; others are reported as usual."""
+        token = _batched.set(True)
         try:
             yield
         finally:
             await self.async_flush()
-            self._quiet = False
+            _batched.reset(token)
             self._notify("reload", "")
 
     def async_add_listener(self, listener: Callable[[str, str], None]) -> Callable[[], None]:
@@ -547,19 +550,20 @@ class NotificationStore:
         """Run a write in the worker; it returns the ids of the records it changed, reported as `change`."""
         future = self._executor.submit(function, *args)
         self._pending.add(future)
-        future.add_done_callback(lambda done: self._done(done, change))
+        batched = _batched.get()
+        future.add_done_callback(lambda done: self._done(done, None if batched else change))
 
-    def _done(self, future: Future[list[str]], change: str) -> None:
-        self._pending.discard(future)
+    def _done(self, future: Future[list[str]], change: str | None) -> None:
+        """Report the change before the write stops counting as pending, so a flush also covers its report."""
         if (error := future.exception()) is not None:
             _LOGGER.warning("Could not store a notification: %s", error)
-            return
-        if self._loop is not None and self._listeners:
+        elif change is not None and self._loop is not None and self._listeners:
             for record_id in future.result():
                 self._loop.call_soon_threadsafe(self._notify, change, record_id)
+        self._pending.discard(future)
 
     def _notify(self, change: str, record_id: str) -> None:
-        if self._quiet:
+        if _batched.get():
             return
         for listener in list(self._listeners):
             listener(change, record_id)

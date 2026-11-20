@@ -1,5 +1,6 @@
 """Tests of what automations get: the events, the query action and today's sensors."""
 
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -66,7 +67,7 @@ async def _setup(hass: HomeAssistant, **options: object) -> RuntimeData:
 
 async def _settle(hass: HomeAssistant, runtime: RuntimeData) -> None:
     await runtime.store.async_flush()
-    await hass.async_block_till_done()
+    await hass.async_block_till_done(wait_background_tasks=True)
 
 
 async def test_recorded_event_carries_the_notification(hass: HomeAssistant, hass_admin_user: User) -> None:
@@ -90,6 +91,29 @@ async def test_recorded_event_carries_the_notification(hass: HomeAssistant, hass
     )
     assert data["recipients"] == [{"id": "person.anna", "name": "Anna M."}]
     assert data["origin"] == {"key": "automation.garage", "name": "Garage door"}
+
+
+async def test_a_notification_sent_during_an_import_is_reported(hass: HomeAssistant, hass_admin_user: User) -> None:
+    runtime = await _setup(hass)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    events: list[Event] = async_capture_events(hass, EVENT_RECORDED)
+    importing, done = asyncio.Event(), asyncio.Event()
+
+    async def import_() -> None:
+        async with runtime.store.async_batch():
+            runtime.store.add(_record("old", "Imported", [], age=timedelta(days=1)))
+            importing.set()
+            await done.wait()
+
+    batch = asyncio.get_running_loop().create_task(import_())
+    await importing.wait()
+    runtime.store.add(_record("new", "Door open", [_person(hass_admin_user, "Anna")]))
+    await _settle(hass, runtime)
+    done.set()
+    await batch
+    await _settle(hass, runtime)
+
+    assert [event.data["id"] for event in events] == ["new"]
 
 
 async def test_failed_event_names_what_failed(hass: HomeAssistant, hass_admin_user: User) -> None:
