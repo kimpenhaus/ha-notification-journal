@@ -254,3 +254,31 @@ async def test_a_failed_notification_of_an_old_journal_counts_once(tmp_path: Pat
     await _open_and_close(path)
 
     assert _counts(path) == [("", "unknown", 1, 1)]
+
+
+def _tag_plan(path: Path) -> str:
+    connection = sqlite3.connect(path)
+    try:
+        rows = connection.execute(
+            "EXPLAIN QUERY PLAN SELECT * FROM notifications WHERE json_extract(data, '$.data.tag') = 'door'"
+        ).fetchall()
+    finally:
+        connection.close()
+    return " ".join(row[-1] for row in rows)
+
+
+async def test_tag_lookup_uses_the_index_after_the_step_to_version_7(tmp_path: Path) -> None:
+    path = tmp_path / "v6.db"
+    _old_database(path, 2)
+    await _open_and_close(path)
+    connection = sqlite3.connect(path)
+    with connection:
+        connection.execute("DROP INDEX notifications_tag")
+        connection.execute("PRAGMA user_version = 6")
+    connection.close()
+    assert "notifications_tag" not in _tag_plan(path)
+
+    await _open_and_close(path)
+
+    assert "USING INDEX notifications_tag" in _tag_plan(path)
+    assert _version(path) == SCHEMA_VERSION

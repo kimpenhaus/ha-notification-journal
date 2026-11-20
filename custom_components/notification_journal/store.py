@@ -15,6 +15,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta, tzinfo
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +54,7 @@ from .statistics import (
 
 _LOGGER = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 VISIBLE_TO_USER = f"rowid IN (SELECT notification FROM notification_users WHERE user_id IN (?, '{EVERYONE}'))"
 BACKUP_PAUSE_LIMIT = 1800
 MIGRATION_COPY_DAYS = 7
@@ -63,6 +64,11 @@ ORIGIN_KEY_OF_ROW = (
 """`origin.origin_key` of a stored row, to fill `origin_key` in migration 5."""
 USERS_OF_ROW = "(SELECT group_concat(user_id, char(31)) FROM notification_users WHERE notification = n.rowid)"
 """Needs the row aliased as `n`; `_users_of` splits what it returns."""
+TAG_OF_ROW = "json_extract(data, '$.data.tag')"
+"""The Companion app's tag of a stored row; a query must spell it the same to use the index on it."""
+TAG_INDEX = (
+    f"CREATE INDEX IF NOT EXISTS notifications_tag ON notifications ({TAG_OF_ROW}) WHERE {TAG_OF_ROW} IS NOT NULL"
+)
 FAILED_ROW = f"status IN ({', '.join(f"'{status}'" for status in FAILED)})"
 
 
@@ -117,7 +123,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notifications_fts USING fts5 (title, message,
 CREATE TRIGGER IF NOT EXISTS notifications_delete AFTER DELETE ON notifications BEGIN
     DELETE FROM notifications_fts WHERE rowid = old.rowid;
 END;
-""" + "".join(f"{statement};\n" for statement in COUNTS_SCHEMA)
+""" + "".join(f"{statement};\n" for statement in (TAG_INDEX, *COUNTS_SCHEMA))
 
 
 def _fill_counts(db: sqlite3.Connection) -> None:
@@ -193,6 +199,7 @@ MIGRATIONS: dict[int, tuple[Migration, ...]] = {
         _fill_counts,
     ),
     6: (_count_failed, "ALTER TABLE notifications ADD COLUMN resent_from TEXT"),
+    7: (TAG_INDEX,),
 }
 """The steps from the previous schema version to each version; a new version adds its step here."""
 
@@ -230,6 +237,35 @@ def remove_database(path: str) -> None:
             file.unlink(missing_ok=True)
 
 
+class StatusFilter(StrEnum):
+    """What the list can be limited to by status."""
+
+    FAILED = "failed"
+    """Failed in whole or in part."""
+    ANSWERED = "answered"
+    """Someone tapped a button; for a user limited to their own notifications, that user."""
+
+
+@dataclass(frozen=True, slots=True)
+class TagClose:
+    """A notification with a tag that ends the earlier ones with that tag on the Companion app's devices it reaches.
+
+    A newer notification replaces them, `clear_notification` withdraws them; only records still sent and
+    unanswered, sent up to `time` (the recorder import replays older calls while recording runs), whose devices
+    among `companion` are all in `devices` change. Submitted before the newer record.
+    """
+
+    source: str
+    tag: str
+    devices: frozenset[str]
+    """The Companion app's channels the call reaches."""
+    companion: frozenset[str]
+    """Every channel of the Companion app; a record's other channels do not count."""
+    status: Status
+    time: datetime
+    by: Origin
+
+
 class NewerSchemaError(RuntimeError):
     """The database was written by a newer version of the integration."""
 
@@ -243,7 +279,7 @@ class Query:
     channel: str | None = None
     origin: str | None = None
     """The key of an origin (`origin_key`): an automation or script, `integration.<domain>`, or a kind."""
-    status: Status | None = None
+    status: StatusFilter | None = None
     tag: str | None = None
     """The Companion app's tag (`data.tag`) the notifications were sent with."""
     since: datetime | None = None
@@ -308,11 +344,15 @@ def _where(query: Query) -> tuple[str, list[Any]]:
     if query.origin:
         where.append("origin_key = ?")
         params.append(query.origin)
-    if query.status is not None:
-        where.append("status = ?")
-        params.append(query.status.value)
+    if query.status is StatusFilter.FAILED:
+        where.append(FAILED_ROW)
+    elif query.status is StatusFilter.ANSWERED and query.user_id is not None:
+        where.append("EXISTS (SELECT 1 FROM json_each(answers) WHERE json_extract(value, '$.user_id') = ?)")
+        params.append(query.user_id)
+    elif query.status is StatusFilter.ANSWERED:
+        where.append("json_array_length(answers) > 0")
     if query.tag:
-        where.append("json_extract(data, '$.data.tag') = ?")
+        where.append(f"{TAG_OF_ROW} = ?")
         params.append(query.tag)
     if query.since is not None:
         where.append("time >= ?")
@@ -396,7 +436,7 @@ class NotificationStore:
         """Submit a new record; tell those who asked for new records right away, also while reporting is quiet."""
         for listener in self._on_add:
             listener(record)
-        self._submit(self._insert, record, notify=("added", record.id))
+        self._submit(self._insert, record, change="added")
 
     def on_add(self, listener: Callable[[NotificationRecord], None]) -> Callable[[], None]:
         """Call listener(record) for every record submitted from now on; return the remover."""
@@ -418,16 +458,20 @@ class NotificationStore:
 
     def add_inner_call(self, record_id: str, call: Call) -> None:
         """Submit a call a group made for one of its members."""
-        self._submit(self._append_call, record_id, call, notify=("updated", record_id))
+        self._submit(self._append_call, record_id, call)
 
     def mark_failed(self, record_id: str, channel: str | None, error: str) -> None:
         """Submit an error of a call: on the member of a group with that channel, which then failed in part or whole,
         else on the record; a channel of None fails the record unless its members already show what failed."""
-        self._submit(self._mark_failed, record_id, channel, error, notify=("updated", record_id))
+        self._submit(self._mark_failed, record_id, channel, error)
 
     def set_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
         """Submit a change of status, with when and by whom it happened."""
-        self._submit(self._update_status, record_id, status, time, by, notify=("updated", record_id))
+        self._submit(self._update_status, record_id, status, time, by)
+
+    def close_tagged(self, close: TagClose) -> None:
+        """Submit the end of the earlier records with a tag."""
+        self._submit(self._close_tagged, close)
 
     async def async_add_answer(self, source: str, answer: Answer) -> str | None:
         """Attach an answer to the latest record of a source sent before it that offered its button; return its id.
@@ -495,18 +539,20 @@ class NotificationStore:
         """Let the held accesses run again."""
         self._resume.set()
 
-    def _submit(self, function: Callable[..., Any], *args: Any, notify: tuple[str, str]) -> None:
+    def _submit(self, function: Callable[..., list[str]], *args: Any, change: str = "updated") -> None:
+        """Run a write in the worker; it returns the ids of the records it changed, reported as `change`."""
         future = self._executor.submit(function, *args)
         self._pending.add(future)
-        future.add_done_callback(lambda done: self._done(done, notify))
+        future.add_done_callback(lambda done: self._done(done, change))
 
-    def _done(self, future: Future[Any], notify: tuple[str, str]) -> None:
+    def _done(self, future: Future[list[str]], change: str) -> None:
         self._pending.discard(future)
         if (error := future.exception()) is not None:
             _LOGGER.warning("Could not store a notification: %s", error)
             return
         if self._loop is not None and self._listeners:
-            self._loop.call_soon_threadsafe(self._notify, *notify)
+            for record_id in future.result():
+                self._loop.call_soon_threadsafe(self._notify, change, record_id)
 
     def _notify(self, change: str, record_id: str) -> None:
         if self._quiet:
@@ -609,7 +655,7 @@ class NotificationStore:
         if not self._resume.wait(BACKUP_PAUSE_LIMIT):
             _LOGGER.warning("Backup did not finish within %s seconds; recording continues", BACKUP_PAUSE_LIMIT)
 
-    def _insert(self, record: NotificationRecord) -> None:
+    def _insert(self, record: NotificationRecord) -> list[str]:
         db = self._db()
         with db:
             cursor = db.execute(
@@ -644,16 +690,17 @@ class NotificationStore:
             )
             self._index(db, cursor.lastrowid, record)
             self._recount(db, None, record)
+        return [record.id]
 
-    def _append_call(self, record_id: str, call: Call) -> None:
+    def _append_call(self, record_id: str, call: Call) -> list[str]:
         db = self._db()
         with db:
             row = db.execute("SELECT rowid FROM notifications WHERE id = ?", (record_id,)).fetchone()
             if row is None:
-                return
+                return []
             before = self._get_by_rowid(db, row[0])
             if before is None:
-                return
+                return []
             calls = [*before.inner_calls, call]
             record = replace(before, inner_calls=calls, status=_group_status(calls) or before.status)
             db.execute(
@@ -663,19 +710,20 @@ class NotificationStore:
             )
             self._index(db, row[0], record)
             self._recount(db, before, record)
+        return [record_id]
 
-    def _mark_failed(self, record_id: str, channel: str | None, error: str) -> None:
+    def _mark_failed(self, record_id: str, channel: str | None, error: str) -> list[str]:
         db = self._db()
         if (record := self._get(record_id)) is None:
-            return
+            return []
         calls, record_error = record.inner_calls, record.error
         if channel is not None and calls:
             failed = next((c for c in calls if c.channel == channel and c.error is None and not c.group), None)
             if failed is None:
-                return
+                return []
             calls = [replace(c, error=error) if c is failed else c for c in calls]
         elif record_error or _group_status(calls):
-            return
+            return []
         else:
             record_error = error
         status = Status.FAILED if record_error else _group_status(calls)
@@ -685,17 +733,39 @@ class NotificationStore:
                 (status.value, record_error, json.dumps([asdict(c) for c in calls]), record_id),
             )
             self._recount(db, record, replace(record, status=status, error=record_error, inner_calls=calls))
+        return [record_id]
 
-    def _update_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> None:
+    def _update_status(self, record_id: str, status: Status, time: datetime, by: Origin | None) -> list[str]:
         db = self._db()
         if (before := self._get(record_id)) is None:
-            return
+            return []
         with db:
-            db.execute(
-                "UPDATE notifications SET status = ?, status_time = ?, status_by = ? WHERE id = ?",
-                (status.value, time.timestamp(), json.dumps(asdict(by)) if by else None, record_id),
-            )
-            self._recount(db, before, replace(before, status=status))
+            self._write_status(db, before, status, time, by)
+        return [record_id]
+
+    def _close_tagged(self, close: TagClose) -> list[str]:
+        db = self._db()
+        rows = db.execute(
+            "SELECT * FROM notifications WHERE source = ? AND status = ? AND json_array_length(answers) = 0 "
+            f"AND time <= ? AND {TAG_OF_ROW} = ?",
+            (close.source, Status.SENT.value, close.time.timestamp(), close.tag),
+        ).fetchall()
+        closed = []
+        with db:
+            for before in map(self._from_row, rows):
+                if (reached := before.devices & close.companion) and reached <= close.devices:
+                    self._write_status(db, before, close.status, close.time, close.by)
+                    closed.append(before.id)
+        return closed
+
+    def _write_status(
+        self, db: sqlite3.Connection, before: NotificationRecord, status: Status, time: datetime, by: Origin | None
+    ) -> None:
+        db.execute(
+            "UPDATE notifications SET status = ?, status_time = ?, status_by = ? WHERE id = ?",
+            (status.value, time.timestamp(), json.dumps(asdict(by)) if by else None, before.id),
+        )
+        self._recount(db, before, replace(before, status=status))
 
     def _add_answer(self, source: str, answer: Answer) -> str | None:
         db = self._db()

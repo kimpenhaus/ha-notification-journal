@@ -10,6 +10,7 @@ import {
   mdiAlertCircleOutline,
   mdiAlertOutline,
   mdiBellCheckOutline,
+  mdiBellRemoveOutline,
   mdiBellOutline,
   mdiBullhornOutline,
   mdiCellphone,
@@ -52,6 +53,7 @@ const STATUS_ICONS: Record<Status, string> = {
   partial: mdiAlertOutline,
   dismissed: mdiBellCheckOutline,
   replaced: mdiSwapHorizontal,
+  withdrawn: mdiBellRemoveOutline,
 };
 
 const ORIGIN_ICONS: Record<OriginKind, string> = {
@@ -760,7 +762,8 @@ export class NotificationJournalRecord extends LitElement {
         --status-color: var(--warning-color);
       }
       .card.dismissed,
-      .card.replaced {
+      .card.replaced,
+      .card.withdrawn {
         --status-color: var(--secondary-text-color);
       }
       .message a {

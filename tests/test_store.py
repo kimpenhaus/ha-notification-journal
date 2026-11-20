@@ -8,6 +8,7 @@ import pytest
 from homeassistant.util import dt as dt_util
 
 from custom_components.notification_journal.models import (
+    Answer,
     Call,
     NotificationRecord,
     Origin,
@@ -16,7 +17,7 @@ from custom_components.notification_journal.models import (
     RecipientKind,
     Status,
 )
-from custom_components.notification_journal.store import NotificationStore, Query
+from custom_components.notification_journal.store import NotificationStore, Query, StatusFilter, TagClose
 
 ANNA = Recipient(kind=RecipientKind.PERSON, id="person.anna", name="Anna", user_id="user-anna")
 BEN = Recipient(kind=RecipientKind.PERSON, id="person.ben", name="Ben", user_id="user-ben")
@@ -136,7 +137,7 @@ async def test_filters(store: NotificationStore) -> None:
     store.add(_record("c", "x", [BEN], origin=Origin(kind=OriginKind.SCRIPT, entity_id="script.night")))
 
     assert await _ids(store, channel="notify.family") == ["b"]
-    assert await _ids(store, status=Status.FAILED) == ["b"]
+    assert await _ids(store, status=StatusFilter.FAILED) == ["b"]
     assert await _ids(store, origin="script.night") == ["c"]
     assert await _ids(store, tag="door") == ["a"]
     assert await _ids(store, origin="automation.garage") == ["b", "a"]
@@ -223,3 +224,82 @@ async def test_purge_tells_listeners(store: NotificationStore) -> None:
 
     assert await store.async_purge(30, 1000, 2) == 1
     assert changes == [("reload", "")]
+
+
+async def test_status_filters(store: NotificationStore) -> None:
+    store.add(_record("failed", "x", [ANNA], status=Status.FAILED, age=timedelta(minutes=3)))
+    store.add(_record("partial", "x", [ANNA, BEN], status=Status.PARTIAL, age=timedelta(minutes=2)))
+    answered = [Answer(action="open", time=dt_util.utcnow(), user_id="user-ben")]
+    store.add(_record("answered", "x", [ANNA, BEN], answers=answered, age=timedelta(minutes=1)))
+    store.add(_record("sent", "x", [ANNA]))
+
+    assert await _ids(store, status=StatusFilter.FAILED) == ["partial", "failed"]
+    assert await _ids(store, status=StatusFilter.ANSWERED) == ["answered"]
+    assert await _ids(store, status=StatusFilter.ANSWERED, user_id="user-ben") == ["answered"]
+    assert await _ids(store, status=StatusFilter.ANSWERED, user_id="user-anna") == []
+
+
+def _tagged(record_id: str, channel: str, age: int, tag: str = "door", **kw) -> NotificationRecord:
+    return _record(
+        record_id, "x", [ANNA], channel=channel, data={"data": {"tag": tag}}, age=timedelta(minutes=age), **kw
+    )
+
+
+async def test_tag_close_changes_only_unanswered_sent_records_on_the_devices(store: NotificationStore) -> None:
+    store.add(_tagged("phone", "notify.phone_anna", 6))
+    store.add(_tagged("other_tag", "notify.phone_anna", 5, tag="window"))
+    store.add(_tagged("other_device", "notify.phone_ben", 5))
+    store.add(_tagged("failed", "notify.phone_anna", 4, status=Status.FAILED))
+    store.add(_tagged("answered", "notify.phone_anna", 3, answers=[Answer(action="ok", time=dt_util.utcnow())]))
+    store.add(
+        _tagged(
+            "family",
+            "notify.family",
+            2,
+            group="notify.family",
+            inner_calls=[
+                Call("notify.phone_anna", [ANNA], "c1"),
+                Call("notify.kids", [], "c2", group=True),
+                Call("notify.phone_ben", [BEN], "c3"),
+            ],
+        )
+    )
+    by = Origin(kind=OriginKind.USER, user_id="user-anna")
+    when = dt_util.utcnow() - timedelta(minutes=1)
+
+    phones = frozenset({"notify.phone_anna", "notify.phone_ben"})
+    store.close_tagged(TagClose("notify", "door", frozenset({"notify.phone_anna"}), phones, Status.REPLACED, when, by))
+    await store.async_flush()
+
+    phone = await store.async_get("phone")
+    assert phone is not None
+    assert (phone.status, phone.status_time, phone.status_by) == (Status.REPLACED, when, by)
+    statuses = {r.id: r.status for r in (await store.async_query(Query())).records}
+    assert statuses == {
+        "phone": Status.REPLACED,
+        "other_tag": Status.SENT,
+        "other_device": Status.SENT,
+        "failed": Status.FAILED,
+        "answered": Status.SENT,
+        "family": Status.SENT,
+    }
+
+    devices = frozenset({"notify.phone_anna", "notify.phone_ben"})
+    store.close_tagged(TagClose("notify", "door", devices, phones, Status.WITHDRAWN, dt_util.utcnow(), by))
+    await store.async_flush()
+
+    statuses = {r.id: r.status for r in (await store.async_query(Query())).records}
+    assert statuses["family"] == statuses["other_device"] == Status.WITHDRAWN
+
+
+async def test_tag_close_leaves_newer_records_alone(store: NotificationStore) -> None:
+    store.add(_tagged("live", "notify.phone_anna", 0))
+    phone = frozenset({"notify.phone_anna"})
+    replayed = dt_util.utcnow() - timedelta(days=3)
+
+    store.close_tagged(TagClose("notify", "door", phone, phone, Status.REPLACED, replayed, GARAGE))
+    await store.async_flush()
+
+    live = await store.async_get("live")
+    assert live is not None
+    assert live.status == Status.SENT

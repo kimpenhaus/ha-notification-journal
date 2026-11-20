@@ -12,15 +12,17 @@ from homeassistant.const import ATTR_ENTITY_ID, EVENT_CALL_SERVICE
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import target
 
-from ..models import Answer, Call, NotificationRecord, Recipient
+from ..models import CHANNEL_SEPARATOR, Answer, Call, NotificationRecord, Recipient, Status, app_data
+from ..origin import resolve_origin
 from ..recipients import (
     NOTIFY_DOMAIN,
     SEND_MESSAGE,
     RecipientResolver,
+    companion_channels,
     entity_group_members,
     legacy_group_members,
 )
-from ..store import NotificationStore
+from ..store import NotificationStore, TagClose
 from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, Listener, as_list, new_record
 
 GROUP_CALL_WINDOW = 5.0
@@ -28,6 +30,9 @@ EVENT_NOTIFICATION_ACTION = "mobile_app_notification_action"
 """Fired by the Companion app when someone taps a button of a notification; its context carries their user."""
 ATTR_ACTION = "action"
 ATTR_REPLY_TEXT = "reply_text"
+ATTR_TAG = "tag"
+CLEAR_NOTIFICATION = "clear_notification"
+"""The message that makes the Companion app remove the notification with the same tag."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +87,10 @@ class NotifySource:
 
     A group calls the action of each member itself, right after its own call and in the same
     asyncio context; those calls are attached to the group's record instead of becoming records.
-    A button someone taps in the Companion app is attached to the record that offered it.
+    A button someone taps in the Companion app is attached to the record that offered it. A notification
+    with a tag replaces the earlier ones with that tag on the Companion app's devices it reaches;
+    `clear_notification` with a tag withdraws them there, and is no record of its own unless it also
+    reaches another service, which gets it as text.
     """
 
     name = NOTIFY_DOMAIN
@@ -142,19 +150,34 @@ class NotifySource:
             return
 
         members = self._group_members(service, channels)
-        record_id = None
-        if not excluded:
-            group = channels[0] if members is not None else None
-            record = self._record(event, service, data, channels, group=group)
+        tag = None if excluded else _tag(data)
+        companion = companion_channels(self._hass) if tag is not None else frozenset()
+        reached = companion.intersection(members if members is not None else channels)
+        withdraw = bool(reached) and message == CLEAR_NOTIFICATION
+        record = None
+        if not excluded and not (withdraw and companion.issuperset(self._ends(members, channels))):
+            record = self._record(event, service, data, channels, group=channels[0] if members is not None else None)
             if (resend := _resends.get(event.context.id)) is not None:
                 record.resent_from, resend.sent = resend.record_id, record.id
+        if tag is not None and reached:
+            self._store.close_tagged(
+                TagClose(
+                    source=self.name,
+                    tag=tag,
+                    devices=reached,
+                    companion=companion,
+                    status=Status.WITHDRAWN if withdraw else Status.REPLACED,
+                    time=event.time_fired,
+                    by=record.origin if record is not None else resolve_origin(self._hass, event.context),
+                )
+            )
+        if record is not None:
             self._store.add(record)
-            record_id = record.id
-            _track(record_id, channels)
+            _track(record.id, channels)
         if members is not None:
             _group_call.set(
                 _GroupCall(
-                    record_id=record_id,
+                    record_id=record.id if record is not None else None,
                     members=frozenset(members),
                     context_id=event.context.id,
                     message=message,
@@ -189,7 +212,7 @@ class NotifySource:
             self._hass,
             event,
             source=self.name,
-            channel=", ".join(channels),
+            channel=CHANNEL_SEPARATOR.join(channels),
             title=data.get(ATTR_TITLE),
             message=str(data.get(ATTR_MESSAGE, "")),
             data=extra,
@@ -206,6 +229,12 @@ class NotifySource:
         if service == SEND_MESSAGE:
             return entity_group_members(self._hass, channel) is not None
         return legacy_group_members(self._hass, service) is not None
+
+    def _ends(self, members: list[str] | None, channels: list[str]) -> list[str]:
+        """The channels of a legacy action's call that are no groups: the action, or the members of its group."""
+        if members is None:
+            return channels
+        return [m for m in members if legacy_group_members(self._hass, m.removeprefix(f"{NOTIFY_DOMAIN}.")) is None]
 
     def _group_members(self, service: str, channels: list[str]) -> list[str] | None:
         """Return every channel a group reaches, nested groups included, or None for no group."""
@@ -234,6 +263,12 @@ class NotifySource:
             and message == parent.message
             and event.time_fired_timestamp - parent.started < GROUP_CALL_WINDOW
         )
+
+
+def _tag(data: dict[str, Any]) -> str | None:
+    """The Companion app's tag of a call (`data.tag`)."""
+    tag = app_data(data).get(ATTR_TAG)
+    return tag if isinstance(tag, str) and tag else None
 
 
 def _track(record_id: str, channels: list[str]) -> None:

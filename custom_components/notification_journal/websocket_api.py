@@ -17,13 +17,13 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.util import dt as dt_util
 
 from .const import CONF_NON_ADMIN_VISIBILITY, DEFAULT_OPTIONS, DOMAIN, SIGNAL_CHANGED, Visibility
-from .models import NotificationRecord, RecipientKind, Status
+from .models import CHANNEL_SEPARATOR, NotificationRecord, RecipientKind
 from .origin import OriginNames, origin_key
 from .recipients import NOTIFY_DOMAIN, SEND_MESSAGE, member_defaults
 from .sources import ATTR_MESSAGE, ATTR_TITLE
 from .sources.notify import resend
 from .statistics import FAILED, PERIOD_KINDS, period, summarize
-from .store import NotificationStore, Query
+from .store import NotificationStore, Query, StatusFilter
 
 MAX_LIMIT = 200
 ERR_NOT_LOADED = "not_loaded"
@@ -109,7 +109,7 @@ def serialize(
         vol.Optional("text"): str,
         vol.Optional("channel"): str,
         vol.Optional("origin"): str,
-        vol.Optional("status"): vol.In([status.value for status in Status]),
+        vol.Optional("status"): vol.In([status.value for status in StatusFilter]),
         vol.Optional("tag"): str,
         vol.Optional("since"): cv.datetime,
         vol.Optional("until"): cv.datetime,
@@ -136,7 +136,7 @@ async def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
             text=msg.get("text"),
             channel=msg.get("channel"),
             origin=msg.get("origin"),
-            status=Status(msg["status"]) if "status" in msg else None,
+            status=StatusFilter(msg["status"]) if "status" in msg else None,
             tag=msg.get("tag"),
             since=msg.get("since"),
             until=msg.get("until"),
@@ -345,7 +345,7 @@ def _calls_again(hass: HomeAssistant, record: NotificationRecord) -> list[tuple[
     text = {ATTR_MESSAGE: record.message, **({ATTR_TITLE: record.title} if record.title else {})}
     calls = []
     for channel in failed or [record.channel]:
-        targets = channel.split(", ")
+        targets = channel.split(CHANNEL_SEPARATOR)
         if all(hass.states.get(target) is not None for target in targets):
             calls.append((SEND_MESSAGE, {**text, ATTR_ENTITY_ID: targets}))
             continue

@@ -104,6 +104,8 @@ async def test_admin_lists_everything_with_filters(
     assert [r["id"] for r in by_user["result"]["records"]] == ["family", "reader"]
     failed = await _call(client, type=f"{DOMAIN}/list", status="failed")
     assert [r["id"] for r in failed["result"]["records"]] == ["family"]
+    refused = await _call(client, type=f"{DOMAIN}/list", status="sent")
+    assert refused["error"]["code"] == "invalid_format"
     text = await _call(client, type=f"{DOMAIN}/list", text="admin")
     assert [r["id"] for r in text["result"]["records"]] == ["admin"]
     oldest = await _call(client, type=f"{DOMAIN}/list", newest_first=False, limit=1, offset=1)

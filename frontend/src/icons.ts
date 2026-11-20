@@ -11,6 +11,7 @@ export {
   mdiArchiveOutline,
   mdiArrowLeft,
   mdiBellCheckOutline,
+  mdiBellRemoveOutline,
   mdiBellOutline,
   mdiBullhornOutline,
   mdiCalendarClockOutline,

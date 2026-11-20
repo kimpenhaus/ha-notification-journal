@@ -108,17 +108,26 @@ def entity_recipient(hass: HomeAssistant, entity_id: str, kind: RecipientKind) -
     return Recipient(kind=kind, id=entity_id, name=state.name if state else entity_id)
 
 
+def _companion_targets(hass: HomeAssistant) -> Iterable[tuple[str, str]]:
+    """Yield the Companion app's legacy notify actions, such as mobile_app_phone, with the webhook of each."""
+    for platform, notify_service in _legacy_services(hass):
+        if platform == MOBILE_APP_DOMAIN:
+            yield from getattr(notify_service, "registered_targets", {}).items()
+
+
+def companion_channels(hass: HomeAssistant) -> frozenset[str]:
+    """Return the legacy notify actions of the Companion app with their domain, such as notify.mobile_app_phone."""
+    return frozenset(f"{NOTIFY_DOMAIN}.{target}" for target, _ in _companion_targets(hass))
+
+
 def mobile_app_entry(hass: HomeAssistant, service: str) -> ConfigEntry | None:
     """Return the Companion app's config entry behind a legacy notify action such as mobile_app_phone."""
-    for platform, notify_service in _legacy_services(hass):
-        if platform != MOBILE_APP_DOMAIN:
-            continue
-        webhook_id = getattr(notify_service, "registered_targets", {}).get(service)
-        if webhook_id is None:
-            continue
-        for entry in hass.config_entries.async_entries(MOBILE_APP_DOMAIN):
-            if entry.data.get(ATTR_WEBHOOK_ID) == webhook_id:
-                return entry
+    webhook_id = next((webhook for target, webhook in _companion_targets(hass) if target == service), None)
+    if webhook_id is None:
+        return None
+    for entry in hass.config_entries.async_entries(MOBILE_APP_DOMAIN):
+        if entry.data.get(ATTR_WEBHOOK_ID) == webhook_id:
+            return entry
     return None
 
 

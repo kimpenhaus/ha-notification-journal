@@ -9,6 +9,14 @@ from typing import Any
 
 EVERYONE: str = "*"
 """The user id under which a record counts for every user."""
+CHANNEL_SEPARATOR = ", "
+"""Between the channels of a record whose call went to several notify entities."""
+
+
+def app_data(data: dict[str, Any] | None) -> dict[str, Any]:
+    """Return what a notify call passes on to the app under `data`, such as the Companion app's tag and buttons."""
+    inner = data.get("data") if isinstance(data, dict) else None
+    return inner if isinstance(inner, dict) else {}
 
 
 class Status(StrEnum):
@@ -21,6 +29,9 @@ class Status(StrEnum):
     """Some of the members of a group failed, the others were sent."""
     DISMISSED = "dismissed"
     REPLACED = "replaced"
+    """Replaced under the bell by one of the same ID, or on every device it reached by one of the same tag."""
+    WITHDRAWN = "withdrawn"
+    """Removed from every device it reached by `clear_notification` with its tag."""
 
 
 class RecipientKind(StrEnum):
@@ -120,6 +131,16 @@ class NotificationRecord:
     status_by: Origin | None = None
     answers: list[Answer] = field(default_factory=list)
     resent_from: str | None = None
+
+    @property
+    def channels(self) -> list[str]:
+        """The channels of the call: one action or group, or the notify entities it went to."""
+        return self.channel.split(CHANNEL_SEPARATOR)
+
+    @property
+    def devices(self) -> set[str]:
+        """The channels the notification reached: those of the call, and those its group called."""
+        return {*self.channels, *(call.channel for call in self.inner_calls)}
 
     @property
     def all_recipients(self) -> list[Recipient]:
