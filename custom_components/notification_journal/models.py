@@ -11,6 +11,9 @@ EVERYONE: str = "*"
 """The user id under which a record counts for every user."""
 CHANNEL_SEPARATOR = ", "
 """Between the channels of a record whose call went to several notify entities."""
+SPOKEN_MESSAGE = "TTS"
+"""The message that makes the Companion app on Android speak `data.tts_text` instead of showing a notification."""
+ATTR_TTS_TEXT = "tts_text"
 
 
 def app_data(data: dict[str, Any] | None) -> dict[str, Any]:
@@ -131,6 +134,12 @@ class NotificationRecord:
     status_by: Origin | None = None
     answers: list[Answer] = field(default_factory=list)
     resent_from: str | None = None
+
+    @property
+    def spoken_text(self) -> str | None:
+        """What the Companion app spoke for `message: TTS`."""
+        text = app_data(self.data).get(ATTR_TTS_TEXT) if self.message == SPOKEN_MESSAGE else None
+        return text if isinstance(text, str) and text else None
 
     @property
     def channels(self) -> list[str]:

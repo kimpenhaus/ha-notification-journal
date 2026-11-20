@@ -98,6 +98,12 @@ export function loadable(address: string, sign: Signer | undefined): string | Pr
   return entry.path;
 }
 
+/** What the Companion app spoke for `message: TTS` instead of showing a notification. */
+export function spokenText(record: NotificationRecord): string | undefined {
+  const text = record.message === "TTS" ? appData(record).tts_text : undefined;
+  return typeof text === "string" && text ? text : undefined;
+}
+
 /** The tag a notification was sent with: a newer one with the same tag replaces it on the phone. */
 export function notificationTag(record: NotificationRecord): string | undefined {
   const tag = appData(record).tag;

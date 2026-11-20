@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -12,7 +13,16 @@ from homeassistant.const import ATTR_ENTITY_ID, EVENT_CALL_SERVICE
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import target
 
-from ..models import CHANNEL_SEPARATOR, Answer, Call, NotificationRecord, Recipient, Status, app_data
+from ..models import (
+    CHANNEL_SEPARATOR,
+    SPOKEN_MESSAGE,
+    Answer,
+    Call,
+    NotificationRecord,
+    Recipient,
+    Status,
+    app_data,
+)
 from ..origin import resolve_origin
 from ..recipients import (
     NOTIFY_DOMAIN,
@@ -33,6 +43,19 @@ ATTR_REPLY_TEXT = "reply_text"
 ATTR_TAG = "tag"
 CLEAR_NOTIFICATION = "clear_notification"
 """The message that makes the Companion app remove the notification with the same tag."""
+COMMANDS = frozenset(
+    {
+        "clear_badge",
+        "delete_alert",
+        "remove_channel",
+        "request_location_update",
+        "update_complications",
+        "update_widgets",
+    }
+)
+"""Messages that make the Companion app do something instead of showing a notification."""
+PREFIXED_COMMAND = re.compile(r"(command|kiosk)_[a-z_]+")
+"""The commands of the Companion app on Android (`command_*`) and in kiosk mode on iOS (`kiosk_*`)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,8 +112,8 @@ class NotifySource:
     asyncio context; those calls are attached to the group's record instead of becoming records.
     A button someone taps in the Companion app is attached to the record that offered it. A notification
     with a tag replaces the earlier ones with that tag on the Companion app's devices it reaches;
-    `clear_notification` with a tag withdraws them there, and is no record of its own unless it also
-    reaches another service, which gets it as text.
+    `clear_notification` with a tag withdraws them there; like the commands to the Companion app, it is no
+    record of its own unless it also reaches another service, which gets it as text.
     """
 
     name = NOTIFY_DOMAIN
@@ -150,12 +173,14 @@ class NotifySource:
             return
 
         members = self._group_members(service, channels)
-        tag = None if excluded else _tag(data)
-        companion = companion_channels(self._hass) if tag is not None else frozenset()
+        command = message in COMMANDS or PREFIXED_COMMAND.fullmatch(message) is not None
+        tag = None if excluded or command or message == SPOKEN_MESSAGE else _tag(data)
+        companion = companion_channels(self._hass) if tag is not None or command else frozenset()
         reached = companion.intersection(members if members is not None else channels)
         withdraw = bool(reached) and message == CLEAR_NOTIFICATION
+        silent = (withdraw or command) and bool(reached) and companion.issuperset(self._ends(members, channels))
         record = None
-        if not excluded and not (withdraw and companion.issuperset(self._ends(members, channels))):
+        if not excluded and not silent:
             record = self._record(event, service, data, channels, group=channels[0] if members is not None else None)
             if (resend := _resends.get(event.context.id)) is not None:
                 record.resent_from, resend.sent = resend.record_id, record.id

@@ -39,7 +39,16 @@ import {
 } from "./icons";
 import { countText, type Localize } from "./localize";
 import { followInternal, inline } from "./markdown";
-import { appData, fileName, loadable, type Media, notificationMedia, notificationTag, type Signer } from "./media";
+import {
+  appData,
+  fileName,
+  loadable,
+  type Media,
+  notificationMedia,
+  notificationTag,
+  type Signer,
+  spokenText,
+} from "./media";
 import { controlStyles, surface } from "./styles";
 import { errorMessage } from "./util";
 import type { Answer, NotificationRecord, Origin, OriginKind, Recipient, Status } from "./types";
@@ -224,13 +233,14 @@ export class NotificationJournalRecord extends LitElement {
     const record = this.record;
     const localize = this.localize;
     const open = record.source === BELL && record.status === "sent";
+    const spoken = record.source === SPEECH || spokenText(record) !== undefined;
     const statusText = open ? localize("status_open") : localize(`status_${record.status}`);
     const statusIcon = open
       ? mdiBellOutline
-      : record.source === SPEECH && record.status === "sent"
+      : spoken && record.status === "sent"
         ? mdiBullhornOutline
         : STATUS_ICONS[record.status];
-    const title = record.title || localize(record.source === SPEECH ? "untitled_speech" : "untitled");
+    const title = record.title || localize(spoken ? "untitled_speech" : "untitled");
     const answered = record.status === "sent" && record.answers.length > 0;
     return html`
       <article
@@ -516,7 +526,7 @@ export class NotificationJournalRecord extends LitElement {
   private _message(): TemplateResult | typeof nothing {
     const record = this.record;
     if (!record.message) return nothing;
-    const content = record.source === BELL ? inline(record.message) : record.message;
+    const content = record.source === BELL ? inline(record.message) : (spokenText(record) ?? record.message);
     return html`<p class="message ${this._details ? "" : "clamp"}">${content}</p>`;
   }
 
