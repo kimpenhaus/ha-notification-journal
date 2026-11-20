@@ -121,7 +121,7 @@
         },
         "origin": {
           "name": "Auslöser",
-          "description": "Die Automation oder das Skript, das sie gesendet hat, `integration.<domain>`, oder `user`, `system` oder `unknown`."
+          "description": "Die Automation oder das Skript, das sie gesendet hat, `integration.` gefolgt von der Domain einer Integration, oder `user`, `system` oder `unknown`."
         },
         "status": {
           "name": "Status",

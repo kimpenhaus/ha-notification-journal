@@ -121,7 +121,7 @@
         },
         "origin": {
           "name": "Origin",
-          "description": "The automation or script that sent them, `integration.<domain>`, or `user`, `system` or `unknown`."
+          "description": "The automation or script that sent them, `integration.` followed by an integration's domain, or `user`, `system` or `unknown`."
         },
         "status": {
           "name": "Status",
