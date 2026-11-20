@@ -12,7 +12,7 @@ Home Assistant forgets a notification the moment it is sent. Notification Journa
 ## Features
 
 - **Records what your home sends**, without changing a single automation:
-  - notify actions: the Companion app, notify groups, notify entities and every other notify integration
+  - notify actions: the Companion app, notify groups, notify entities and every other notify integration; what the Companion app speaks on Android (`message: TTS`) with the spoken text
   - Home Assistant's own notifications under the bell in the sidebar (discovered devices, failed logins, `persistent_notification.create`), including when and by whom they were dismissed
   - spoken announcements with text: `tts.speak` on media players and `assist_satellite.announce` on voice satellites
   - Telegram: messages, captioned photos, videos and files, and polls sent with the Telegram bot's own actions, named after the chats
@@ -113,6 +113,7 @@ Old entries are deleted once a day (*Retention*); the hourly counts stay as long
 - Notifications sent outside Home Assistant, such as directly by an app or a cloud service.
 - `media_player.play_media` with `announce`, `assist_satellite.start_conversation` and `ask_question`, and the older `tts.*_say` actions.
 - Spoken announcements without text (a sound only).
+- Commands to the Companion app instead of a notification: `clear_badge`, `request_location_update`, `remove_channel`, `update_widgets`, the `command_…` and `kiosk_…` commands and the like, and `clear_notification` with a tag (see [Tags](#tags)). A command to a group that also reaches another service is recorded, as that service gets it as text.
 - Telegram photos, videos and files without a caption, locations, stickers, media groups, and edits of messages already sent.
 - Anything sent before the integration was set up, beyond what the recorder still held then; the bell's notifications from before setup.
 

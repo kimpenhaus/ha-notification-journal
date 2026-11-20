@@ -826,7 +826,14 @@ class NotificationStore:
         db.execute("DELETE FROM notifications_fts WHERE rowid = ?", (rowid,))
         db.execute(
             "INSERT INTO notifications_fts (rowid, title, message, channel, people, origin) VALUES (?, ?, ?, ?, ?, ?)",
-            (rowid, record.title or "", record.message, record.channel, _people(record), record.origin.name or ""),
+            (
+                rowid,
+                record.title or "",
+                record.spoken_text or record.message,
+                record.channel,
+                _people(record),
+                record.origin.name or "",
+            ),
         )
 
     def _set_archived(self, record_ids: list[str], user_id: str, archived: bool, visible_to: str | None) -> int:

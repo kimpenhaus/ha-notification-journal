@@ -381,9 +381,13 @@ def companion(hass: HomeAssistant, phones: list) -> list:
     return phones
 
 
-async def _send(hass: HomeAssistant, service: str, message: str, tag: str | None = "garage") -> None:
-    await hass.services.async_call("notify", service, {"message": message, "data": {"tag": tag}}, blocking=True)
+async def _command(hass: HomeAssistant, service: str, message: str, **data: object) -> None:
+    await hass.services.async_call("notify", service, {"message": message, "data": data}, blocking=True)
     await hass.async_block_till_done()
+
+
+async def _send(hass: HomeAssistant, service: str, message: str, tag: str | None = "garage") -> None:
+    await _command(hass, service, message, tag=tag)
 
 
 async def test_tag_replaces_earlier_notification_on_the_same_device(hass: HomeAssistant, companion: list) -> None:
@@ -469,3 +473,52 @@ async def test_clear_notification_reaching_another_service_is_recorded(
     await _send(hass, "family", "clear_notification")
 
     assert await _statuses(runtime) == [("Dinner", Status.WITHDRAWN), ("clear_notification", Status.SENT)]
+
+
+async def test_commands_to_the_companion_app_are_not_recorded(hass: HomeAssistant, companion: list) -> None:
+    runtime = await _setup(hass)
+
+    await _send(hass, "phone_ben", "Door open")
+    await _command(hass, "phone_ben", "request_location_update")
+    await _command(hass, "phone_ben", "command_dnd", command="priority_only", tag="garage")
+    await _command(hass, "family", "kiosk_reload")
+
+    assert len(companion) == 5
+    assert await _statuses(runtime) == [("Door open", Status.SENT)]
+
+
+async def test_command_reaching_another_service_is_recorded(hass: HomeAssistant, phones: list, anna: str) -> None:
+    runtime = await _setup(hass)
+
+    await _command(hass, "phone_ben", "clear_badge")
+    await _command(hass, "family", "command_volume_level", command=5, media_stream="music_stream")
+
+    assert await _statuses(runtime) == [("clear_badge", Status.SENT), ("command_volume_level", Status.SENT)]
+
+
+async def test_spoken_notification_is_recorded_with_its_text(hass: HomeAssistant, companion: list) -> None:
+    runtime = await _setup(hass)
+
+    await _command(hass, "phone_ben", "TTS", tts_text="The washing machine is done")
+
+    record = await _only(runtime)
+    assert (record.message, record.spoken_text) == ("TTS", "The washing machine is done")
+    found = await runtime.store.async_query(Query(text="washing"))
+    assert [r.id for r in found.records] == [record.id]
+
+
+async def test_spoken_notification_replaces_nothing(hass: HomeAssistant, companion: list) -> None:
+    runtime = await _setup(hass)
+
+    await _send(hass, "phone_ben", "Door open")
+    await _command(hass, "phone_ben", "TTS", tts_text="The door is still open", tag="garage")
+
+    assert await _statuses(runtime) == [("Door open", Status.SENT), ("TTS", Status.SENT)]
+
+
+async def test_text_that_only_starts_like_a_command_is_recorded(hass: HomeAssistant, companion: list) -> None:
+    runtime = await _setup(hass)
+
+    await _command(hass, "phone_ben", "kiosk_mode was turned off")
+
+    assert (await _only(runtime)).message == "kiosk_mode was turned off"
