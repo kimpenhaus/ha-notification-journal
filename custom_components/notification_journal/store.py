@@ -73,7 +73,7 @@ TAG_INDEX = (
 FAILED_ROW = f"status IN ({', '.join(f"'{status}'" for status in FAILED)})"
 
 _batched: ContextVar[bool] = ContextVar("notification_journal_batched", default=False)
-"""Set inside async_batch: what is done in that context is reported once at the end, what runs beside it as usual."""
+"""Read where a change is submitted or reported: a write finishes in the worker thread, whose context never has it."""
 
 
 def _users_of(value: str | None) -> list[str]:
@@ -414,9 +414,11 @@ class NotificationStore:
         try:
             yield
         finally:
-            await self.async_flush()
-            _batched.reset(token)
-            self._notify("reload", "")
+            try:
+                await self.async_flush()
+            finally:
+                _batched.reset(token)
+                self._notify("reload", "")
 
     def async_add_listener(self, listener: Callable[[str, str], None]) -> Callable[[], None]:
         """Call listener(change, record_id) once a record was added, changed or removed; return the remover."""
@@ -436,7 +438,7 @@ class NotificationStore:
             await asyncio.wait([asyncio.wrap_future(f) for f in list(self._pending)])
 
     def add(self, record: NotificationRecord) -> None:
-        """Submit a new record; tell those who asked for new records right away, also while reporting is quiet."""
+        """Submit a new record; tell those who asked for new records right away, also inside a batch."""
         for listener in self._on_add:
             listener(record)
         self._submit(self._insert, record, change="added")
@@ -550,11 +552,11 @@ class NotificationStore:
         """Run a write in the worker; it returns the ids of the records it changed, reported as `change`."""
         future = self._executor.submit(function, *args)
         self._pending.add(future)
-        batched = _batched.get()
-        future.add_done_callback(lambda done: self._done(done, None if batched else change))
+        reported = None if _batched.get() else change
+        future.add_done_callback(lambda done: self._done(done, reported))
 
     def _done(self, future: Future[list[str]], change: str | None) -> None:
-        """Report the change before the write stops counting as pending, so a flush also covers its report."""
+        """Queue the change report before the write stops counting as pending, so it is queued once a flush returns."""
         if (error := future.exception()) is not None:
             _LOGGER.warning("Could not store a notification: %s", error)
         elif change is not None and self._loop is not None and self._listeners:

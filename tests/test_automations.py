@@ -95,13 +95,13 @@ async def test_recorded_event_carries_the_notification(hass: HomeAssistant, hass
 
 async def test_a_notification_sent_during_an_import_is_reported(hass: HomeAssistant, hass_admin_user: User) -> None:
     runtime = await _setup(hass)
-    await hass.async_block_till_done(wait_background_tasks=True)
+    await _settle(hass, runtime)
     events: list[Event] = async_capture_events(hass, EVENT_RECORDED)
     importing, done = asyncio.Event(), asyncio.Event()
 
     async def import_() -> None:
         async with runtime.store.async_batch():
-            runtime.store.add(_record("old", "Imported", [], age=timedelta(days=1)))
+            runtime.store.add(_record("old", "Imported", []))
             importing.set()
             await done.wait()
 
