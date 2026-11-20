@@ -10,5 +10,20 @@
         }
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "notifications_today": {
+        "default": "mdi:bell-outline"
+      },
+      "failed_today": {
+        "default": "mdi:bell-alert-outline"
+      }
+    }
+  },
+  "services": {
+    "query": {
+      "service": "mdi:text-box-search-outline"
+    }
   }
 }

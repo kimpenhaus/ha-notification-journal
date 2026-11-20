@@ -1,0 +1,40 @@
+query:
+  fields:
+    text:
+      selector:
+        text:
+    channel:
+      example: notify.mobile_app_phone
+      selector:
+        text:
+    origin:
+      example: automation.garage_door
+      selector:
+        text:
+    status:
+      selector:
+        select:
+          options:
+            - failed
+            - answered
+          translation_key: query_status
+    tag:
+      selector:
+        text:
+    since:
+      selector:
+        datetime:
+    until:
+      selector:
+        datetime:
+    limit:
+      default: 50
+      selector:
+        number:
+          min: 1
+          max: 200
+          mode: box
+    newest_first:
+      default: true
+      selector:
+        boolean:

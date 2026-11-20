@@ -14,12 +14,19 @@ CHANNEL_SEPARATOR = ", "
 SPOKEN_MESSAGE = "TTS"
 """The message that makes the Companion app on Android speak `data.tts_text` instead of showing a notification."""
 ATTR_TTS_TEXT = "tts_text"
+ATTR_TAG = "tag"
 
 
 def app_data(data: dict[str, Any] | None) -> dict[str, Any]:
     """Return what a notify call passes on to the app under `data`, such as the Companion app's tag and buttons."""
     inner = data.get("data") if isinstance(data, dict) else None
     return inner if isinstance(inner, dict) else {}
+
+
+def tag_of(data: dict[str, Any] | None) -> str | None:
+    """Return the Companion app's tag (`data.tag`) of a notify call's data."""
+    tag = app_data(data).get(ATTR_TAG)
+    return tag if isinstance(tag, str) and tag else None
 
 
 class Status(StrEnum):

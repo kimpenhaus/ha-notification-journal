@@ -29,6 +29,7 @@ Home Assistant forgets a notification the moment it is sent. Notification Journa
 - **Private by person**: administrators see everything; everybody else sees the notifications sent to them, the bell and spoken announcements. Telegram chats belong to no Home Assistant user, so only administrators see those.
 - **Starts with the past**: on first setup it imports what Home Assistant's recorder still holds (10 days by default): notify calls, spoken announcements, Telegram messages and the answers to buttons. The automation or script that sent them comes from the recorded context; a notification an integration sent shows as unknown, and the bell's notifications from before are not in the recorder.
 - **Live**: the panel updates while it is open, and catches up on what it missed while its connection was down.
+- **For automations**: an event for every notification recorded and one for every failure, an action that returns the journal's notifications as response data, and sensors with today's notifications and failures; see [Automations](#automations).
 - English and German.
 
 ## Installation
@@ -102,9 +103,63 @@ Administrators can send a failed or partly failed notification again with *Send 
 
 Failed pushes of the Companion app are read from what it logs at *warning* and above; with its log level set higher (`logger:` in `configuration.yaml`), they stay *sent*.
 
+## Automations
+
+### Events
+
+- `notification_journal_recorded`: a notification was recorded.
+- `notification_journal_failed`: a notification, or a member of its group, failed; fired again for each further member that fails.
+
+Both carry `id`, `time`, `source`, `channel`, `group`, `title`, `message` (for `message: TTS` the spoken text), `recipients` (`id` and `name` of each), `origin` (`key` and current `name`), `status`, `tag`, `error` and `failed_calls` (`channel` and `error` of each member that failed). Nothing is fired while the first setup imports from the recorder, neither for what it imports nor for what is sent meanwhile.
+
+Send a failed notification another way:
+
+```yaml
+triggers:
+  - trigger: event
+    event_type: notification_journal_failed
+actions:
+  - action: persistent_notification.create
+    data:
+      title: "Not delivered: {{ trigger.event.data.title or 'Notification' }}"
+      message: "{{ trigger.event.data.message }}"
+```
+
+### Query
+
+`notification_journal.query` returns the notifications that match its filters as response data: `text`, `channel`, `origin` (an automation or script, `integration.<domain>`, `user`, `system` or `unknown`), `status` (`failed` or `answered`), `tag`, `since`, `until`, `limit` (at most 200) and `newest_first`. The response holds `records`, each as the panel shows it, and `total`, the number of all matches. An automation gets every notification; a user who is no administrator, running a script by hand for example, only what the panel shows them. The archive is a view of the panel, so archived notifications are included.
+
+A summary of yesterday, with `total` for the counts (`records` holds at most `limit` notifications):
+
+```yaml
+actions:
+  - action: notification_journal.query
+    data:
+      since: "{{ today_at() - timedelta(days=1) }}"
+      until: "{{ today_at() }}"
+      limit: 1
+    response_variable: sent
+  - action: notification_journal.query
+    data:
+      since: "{{ today_at() - timedelta(days=1) }}"
+      until: "{{ today_at() }}"
+      status: failed
+      limit: 1
+    response_variable: failed
+  - action: notify.notify
+    data:
+      message: "{{ sent.total }} notifications yesterday, {{ failed.total }} of them failed."
+```
+
+### Sensors
+
+*Notifications today* and *Failed today* count the notifications since local midnight, from the statistics; failed counts those that failed in whole or in part. Both start again at zero at midnight (state class *total* with its reset then), so the long-term statistics sum them up per day.
+
 ## Privacy
 
 Everything stays in your Home Assistant. The journal is an SQLite database, `notification_journal.db`, next to `configuration.yaml`, separate from the recorder. It holds per notification: title, message, the data sent with it (actions, references to images and links, tags), the recipients, the automation, script, user or integration that sent it, the answers to its buttons, and the time. Images and attachments themselves are not copied, only their references; the panel loads a preview from that address in the browser of whoever looks at it. For the statistics it also counts per hour how many notifications each origin sent to whom, without any text.
+
+The [events](#events) carry the title and message of each notification, and the recorder stores events like everything else in its database, as it already stores the notify calls with their text; to keep them out, add `notification_journal_recorded` and `notification_journal_failed` to the recorder's `exclude: event_types:`. The [sensors](#sensors) count every notification, and every user can see them.
 
 Old entries are deleted once a day (*Retention*); the hourly counts stay as long as *Keep statistics for* says, also after the notifications are deleted. The database is part of every Home Assistant backup; recording pauses while a backup is taken. Removing the integration deletes the database with it; setting it up again starts a new journal.
 

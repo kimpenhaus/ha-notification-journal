@@ -7,11 +7,13 @@ from datetime import date, datetime, time, timedelta, tzinfo
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.auth.models import User
 from homeassistant.components import websocket_api
 from homeassistant.components.group.notify import add_defaults
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.core import HomeAssistant, State, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import Context, HomeAssistant, State, callback
+from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.util import dt as dt_util
@@ -44,26 +46,71 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_resend)
 
 
+FILTERS = {
+    vol.Optional("text"): cv.string,
+    vol.Optional("channel"): cv.string,
+    vol.Optional("origin"): cv.string,
+    vol.Optional("status"): vol.In([status.value for status in StatusFilter]),
+    vol.Optional("tag"): cv.string,
+    vol.Optional("since"): cv.datetime,
+    vol.Optional("until"): cv.datetime,
+    vol.Optional("newest_first", default=True): cv.boolean,
+    vol.Optional("limit", default=50): vol.All(vol.Coerce(int), vol.Range(min=1, max=MAX_LIMIT)),
+}
+"""The filters of the list, shared by the command and the query action."""
+
+
+def filters(data: dict[str, Any]) -> dict[str, Any]:
+    """Return the fields of a `Query` for validated FILTERS; a time without a zone is Home Assistant's."""
+    return {
+        "text": data.get("text"),
+        "channel": data.get("channel"),
+        "origin": data.get("origin"),
+        "status": StatusFilter(data["status"]) if "status" in data else None,
+        "tag": data.get("tag"),
+        "since": dt_util.as_utc(data["since"]) if "since" in data else None,
+        "until": dt_util.as_utc(data["until"]) if "until" in data else None,
+        "newest_first": data["newest_first"],
+        "limit": data["limit"],
+    }
+
+
+def loaded_entry(hass: HomeAssistant) -> ConfigEntry | None:
+    """Return the integration's entry while it is loaded."""
+    entries = hass.config_entries.async_loaded_entries(DOMAIN)
+    return entries[0] if entries else None
+
+
+def non_admins_see_nothing(entry: ConfigEntry) -> bool:
+    """Return whether users who are no administrators may see nothing of the journal."""
+    return {**DEFAULT_OPTIONS, **entry.options}[CONF_NON_ADMIN_VISIBILITY] == Visibility.NONE
+
+
+def scope_of(entry: ConfigEntry, user: User, context: Context | None = None) -> str | None:
+    """Return the user a caller is limited to, none for an administrator; raise Unauthorized when they see nothing."""
+    if user.is_admin:
+        return None
+    if non_admins_see_nothing(entry):
+        raise Unauthorized(context=context)
+    return user.id
+
+
 def _store_and_scope(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
 ) -> tuple[NotificationStore, str | None] | None:
     """Return the store and the user the caller is limited to, or send an error and return None."""
-    entries = hass.config_entries.async_loaded_entries(DOMAIN)
-    if not entries:
+    if (entry := loaded_entry(hass)) is None:
         connection.send_error(msg["id"], ERR_NOT_LOADED, "Notification Journal is not set up")
         return None
-    entry = entries[0]
-    user = connection.user
-    if user.is_admin:
-        return entry.runtime_data.store, msg.get("user_id")
-    visibility = {**DEFAULT_OPTIONS, **entry.options}[CONF_NON_ADMIN_VISIBILITY]
-    if visibility == Visibility.NONE:
+    try:
+        user_id = scope_of(entry, connection.user)
+    except Unauthorized:
         connection.send_error(msg["id"], websocket_api.ERR_UNAUTHORIZED, "Only administrators see the history")
         return None
-    return entry.runtime_data.store, user.id
+    return entry.runtime_data.store, msg.get("user_id") if user_id is None else user_id
 
 
-def _people(hass: HomeAssistant) -> dict[str, State]:
+def current_people(hass: HomeAssistant) -> dict[str, State]:
     return {state.entity_id: state for state in hass.states.async_all("person")}
 
 
@@ -84,7 +131,7 @@ def serialize(
     if user_id is not None:
         result["answers"] = [answer for answer in result["answers"] if answer["user_id"] == user_id]
     if people is None:
-        people = _people(hass)
+        people = current_people(hass)
     for recipient in [*result["recipients"], *(r for call in result["inner_calls"] for r in call["recipients"])]:
         if recipient["kind"] == RecipientKind.PERSON and (state := people.get(recipient["id"])):
             recipient["name"] = state.name
@@ -106,18 +153,10 @@ def serialize(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/list",
-        vol.Optional("text"): str,
-        vol.Optional("channel"): str,
-        vol.Optional("origin"): str,
-        vol.Optional("status"): vol.In([status.value for status in StatusFilter]),
-        vol.Optional("tag"): str,
-        vol.Optional("since"): cv.datetime,
-        vol.Optional("until"): cv.datetime,
+        **FILTERS,
         vol.Optional("user_id"): str,
-        vol.Optional("newest_first", default=True): bool,
         vol.Optional("group_by"): vol.In([GROUP_BY_ORIGIN]),
         vol.Optional("archived", default=False): bool,
-        vol.Optional("limit", default=50): vol.All(int, vol.Range(min=1, max=MAX_LIMIT)),
         vol.Optional("offset", default=0): vol.All(int, vol.Range(min=0)),
         vol.Optional("days", default=False): bool,
         vol.Optional("time_zone"): str,
@@ -133,24 +172,16 @@ async def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
     page = await store.async_query(
         Query(
             user_id=user_id,
-            text=msg.get("text"),
-            channel=msg.get("channel"),
-            origin=msg.get("origin"),
-            status=StatusFilter(msg["status"]) if "status" in msg else None,
-            tag=msg.get("tag"),
-            since=msg.get("since"),
-            until=msg.get("until"),
-            newest_first=msg["newest_first"],
+            **filters(msg),
             group_by_origin=msg.get("group_by") == GROUP_BY_ORIGIN,
             archive_user_id=connection.user.id,
             archived=msg["archived"],
-            limit=msg["limit"],
             offset=msg["offset"],
             with_counts=msg["offset"] == 0,
             days_in=zone,
         )
     )
-    people = _people(hass)
+    people = current_people(hass)
     names = OriginNames(hass)
     result: dict[str, Any] = {"records": [serialize(hass, r, people, names, user_id=user_id) for r in page.records]}
     if page.total is not None:
@@ -289,8 +320,7 @@ async def _time_zone(name: str | None) -> tzinfo:
 
 
 def _non_admins_see_nothing(hass: HomeAssistant) -> bool:
-    entries = hass.config_entries.async_loaded_entries(DOMAIN)
-    return bool(entries) and {**DEFAULT_OPTIONS, **entries[0].options}[CONF_NON_ADMIN_VISIBILITY] == Visibility.NONE
+    return (entry := loaded_entry(hass)) is not None and non_admins_see_nothing(entry)
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/delete", vol.Required("record_id"): str})
