@@ -123,7 +123,7 @@ Made-up data in the [Nordic theme](https://github.com/coltondick/nordic-theme-ma
 
 ### Timeline
 
-Every day with its notifications; a notification shows its picture, the buttons and who tapped them, and whom a group reached.
+Every day with its notifications; a notification shows its picture, the buttons and who tapped them, and whom a group reached. Below it, what a phone spoke aloud, and a notification withdrawn from the phones by its tag.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/timeline-nordic-dark.png">
