@@ -25,6 +25,7 @@
 - `README.md` is for users (what it does, installation, options, privacy); how it is built, tested and released goes into `docs/DEVELOPMENT.md`. Its section *How this project was made* is wanted by the maintainer and stays.
 - Log at `warning` and above for what a user has to act on; routine operation logs at `debug`.
 - Only add a comment when the reader cannot derive it from the code.
+- Tests that check what the store reports (events, sensors, panel updates) call `hass.async_block_till_done(wait_background_tasks=True)` after `store.async_flush()`: the reports and, on the first setup of a test, the import from the recorder are background tasks of the entry; a test that then reads the store flushes again.
 - The panel uses the theme's CSS variables and the `hass` object only: no colour, font or shadow of its own and no fallback for a variable Home Assistant always sets (only the optional `--ha-card-*` ones get one, as in `ha-card`); the card surface and the controls the views share live in `frontend/src/styles.ts`, no internal `ha-*` components of the Home Assistant frontend apart from `ha-icon` with a fallback; its texts live in `frontend/src/localize.ts` with `en` and `de`.
 
 ## Commits, Pull Requests and Releases
@@ -35,8 +36,9 @@
 - Conventional Commit subjects: `type(scope): imperative summary`, the summary starting with a lowercase letter, without a final period, at most 50 characters. The scope is required and one of those in `.github/workflows/pr-title.yml`, which checks the title of every pull request (`Conventional PR title`); a new part of the integration adds its scope there. release-please derives the version and the changelog from the subjects: `fix` is a patch, `feat` a minor version, `!` a breaking change.
 - `feat`, `fix`, `perf` and `revert` end up in the release notes, so they describe what users notice; changes to CI, tests, tooling or docs use `ci`, `test`, `chore` or `docs`, even when they repair something, with the scope of the part they concern (`test(store): …`, `ci(release): …`), or `docs`, `ci` or `tooling` for the docs besides the README, the CI jobs and the build and lint tools. A revert made with GitHub's button is renamed to `revert(<scope>): …`.
 - A pull request that resolves an issue has `Closes #<n>` in its description.
+- Branch names contain no `tags/` and do not end in `tags`, or the `hacs` check fails: HACS strips `tags/` from a branch's download address, and a name ending in `tags` puts `tags/` into it as well.
 - Do not edit the version in `manifest.json` or `CHANGELOG.md` by hand; release-please does that in its release pull request.
-- Before the release pull request is merged, compare `README.md`, `docs/DEVELOPMENT.md` and the screenshots with everything the release contains (its changelog): every feature is in the README's feature list, and every one users can see is on a screenshot. Close the gaps by pull request first; that each pull request updated the docs does not replace this check.
+- Before the release pull request is merged, a beta with everything it contains is tagged and tested on a Home Assistant installation (*CI and releases* in `docs/DEVELOPMENT.md`), and `README.md`, `docs/DEVELOPMENT.md` and the screenshots are compared with everything the release contains (its changelog): every feature is in the README's feature list, and every one users can see is on a screenshot. Close the gaps by pull request first; that each pull request updated the docs does not replace this check.
 - Do not add `Co-Authored-By`, AI attribution, or another author identity to commits, pull requests, issue comments or release notes.
 
 ## Security
