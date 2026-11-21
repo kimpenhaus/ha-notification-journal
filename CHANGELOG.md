@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0](https://github.com/kimpenhaus/ha-notification-journal/compare/v0.4.0...v0.5.0) (2026-11-21)
+
+
+### New
+
+* **automations:** add events, query and sensors ([#112](https://github.com/kimpenhaus/ha-notification-journal/issues/112)) ([0da7d53](https://github.com/kimpenhaus/ha-notification-journal/commit/0da7d534c562867d2457264cd790d4a527e07608))
+* **sources:** mark notifications replaced by tag ([#107](https://github.com/kimpenhaus/ha-notification-journal/issues/107)) ([6d33a15](https://github.com/kimpenhaus/ha-notification-journal/commit/6d33a155ef084506bcf2b90dfd3635a2c61a0eb5))
+* **sources:** skip commands to the companion app ([#109](https://github.com/kimpenhaus/ha-notification-journal/issues/109)) ([3a15f47](https://github.com/kimpenhaus/ha-notification-journal/commit/3a15f4714b8939dafb04c376a745fc85fbaf7d17))
+
+
+### Fixed
+
+* **store:** report live changes during an import ([#115](https://github.com/kimpenhaus/ha-notification-journal/issues/115)) ([def0890](https://github.com/kimpenhaus/ha-notification-journal/commit/def08906549b42665278bfb34f5b852b42a29d5e))
+
 ## [0.4.0](https://github.com/kimpenhaus/ha-notification-journal/compare/v0.3.1...v0.4.0) (2026-11-19)
 
 
