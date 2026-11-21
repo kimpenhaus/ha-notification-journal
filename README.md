@@ -110,7 +110,7 @@ Failed pushes of the Companion app are read from what it logs at *warning* and a
 - `notification_journal_recorded`: a notification was recorded.
 - `notification_journal_failed`: a notification, or a member of its group, failed; fired again for each further member that fails.
 
-Both carry `id`, `time`, `source`, `channel`, `group`, `title`, `message` (for `message: TTS` the spoken text), `recipients` (`id` and `name` of each), `origin` (`key` and current `name`), `status`, `tag`, `error` and `failed_calls` (`channel` and `error` of each member that failed). Nothing is fired while the first setup imports from the recorder, neither for what it imports nor for what is sent meanwhile.
+Both carry `id`, `time`, `source`, `channel`, `group`, `title`, `message` (for `message: TTS` the spoken text), `recipients` (`id` and `name` of each), `origin` (`key` and current `name`), `status`, `tag`, `error` and `failed_calls` (`channel` and `error` of each member that failed). Nothing is fired for what the first setup imports from the recorder; a notification sent while it imports fires as usual.
 
 Send a failed notification another way:
 
