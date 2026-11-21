@@ -1,6 +1,7 @@
 import { css, html, LitElement, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 
+import { download, type ExportFormat, exportFile } from "./export";
 import { type Clock, dayKey, dayLabel, formatter, zoneName } from "./format";
 import {
   icon,
@@ -25,6 +26,7 @@ import {
   mdiSortClockAscendingOutline,
   mdiSortClockDescendingOutline,
   mdiTagOutline,
+  mdiTrayArrowDown,
   mdiUnfoldLessHorizontal,
   mdiUnfoldMoreHorizontal,
 } from "./icons";
@@ -54,6 +56,7 @@ import { errorMessage, store, stored } from "./util";
 const PAGE_SIZE = 50;
 const DAY_PAGE_SIZE = 200;
 const ARCHIVE_BATCH = 200;
+const EXPORT_PAGE = 200;
 const SEARCH_DELAY = 300;
 const SUBSCRIBE_RETRY = 5000;
 const PERIODS: Record<Exclude<Period, "">, number> = { day: 1, week: 7, month: 30, quarter: 90 };
@@ -119,6 +122,7 @@ export class NotificationJournalPanel extends LitElement {
     _notice: { state: true },
     _archived: { state: true },
     _selecting: { state: true },
+    _exporting: { state: true },
     _selected: { state: true },
     _screen: { state: true },
   };
@@ -146,6 +150,7 @@ export class NotificationJournalPanel extends LitElement {
   declare _notice: string | undefined;
   declare _archived: boolean;
   declare _selecting: boolean;
+  declare _exporting: boolean;
   declare _selected: Set<string>;
   declare _screen: "list" | "statistics";
 
@@ -181,6 +186,7 @@ export class NotificationJournalPanel extends LitElement {
     this._dayLoads = new Map();
     this._archived = false;
     this._selecting = false;
+    this._exporting = false;
     this._selected = new Set();
     this._screen = "list";
     this._search = "";
@@ -1000,10 +1006,11 @@ export class NotificationJournalPanel extends LitElement {
             <span>${localize(filters.newestFirst ? "newest_first" : "oldest_first")}</span>
           </button>
           <span class="spacer"></span>
+          ${this._selecting || !this._records.length ? nothing : this._exportMenu(localize)}
           ${
             this._selecting || !this._records.length
               ? nothing
-              : html`<button class="text-button" @click=${() => (this._selecting = true)}>
+              : html`<button class="text-button" ?disabled=${this._exporting} @click=${() => (this._selecting = true)}>
                   ${icon(mdiCheckboxMultipleMarkedOutline)}${localize("select")}
                 </button>`
           }
@@ -1024,6 +1031,51 @@ export class NotificationJournalPanel extends LitElement {
         ${this._keptNotice(localize)}
       </div>
     `;
+  }
+
+  private _exportMenu(localize: Localize): TemplateResult {
+    const format = (kind: ExportFormat) =>
+      html`<button
+        class="text-button"
+        title=${localize(kind === "csv" ? "export_csv" : "export_json")}
+        ?disabled=${this._exporting}
+        @click=${() => void this._export(kind)}
+      >
+        ${kind.toUpperCase()}
+      </button>`;
+    return html`<span class="export" role="group" aria-label=${localize("export")}>
+      ${icon(mdiTrayArrowDown)}<span>${localize(this._exporting ? "exporting" : "export")}</span>
+      ${format("csv")}${format("json")}
+    </span>`;
+  }
+
+  /** Save every notification the list shows, as its filters stand when the export starts, page by page, as a file. */
+  private async _export(format: ExportFormat): Promise<void> {
+    this._notice = undefined;
+    this._exporting = true;
+    const localize = this._localize;
+    const query: Record<string, unknown> = { ...this._query(), group_by: undefined };
+    query.until ??= new Date().toISOString();
+    try {
+      const records = new Map<string, NotificationRecord>();
+      for (let offset = 0; ; offset += EXPORT_PAGE) {
+        const page = await this._hass!.connection.sendMessagePromise<Page>({
+          type: "notification_journal/list",
+          ...query,
+          limit: EXPORT_PAGE,
+          offset,
+        });
+        if (!this.isConnected) return;
+        for (const record of page.records) records.set(record.id, record);
+        if (page.records.length < EXPORT_PAGE) break;
+      }
+      download(exportFile(format, [...records.values()], this._lookups().userNames, localize, new Date()));
+      this._notice = countText(localize, records.size, "export_done_one", "export_done");
+    } catch (error) {
+      this._notice = localize("export_failed", { message: errorMessage(error) });
+    } finally {
+      this._exporting = false;
+    }
   }
 
   /** Say so when the list opened from the statistics reaches back further than single notifications are kept. */
@@ -1360,6 +1412,22 @@ export class NotificationJournalPanel extends LitElement {
     .text-button[disabled] {
       color: var(--disabled-text-color);
       cursor: default;
+    }
+    .export {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding-left: 10px;
+      color: var(--secondary-text-color);
+      font-size: 0.875rem;
+    }
+    .export > .icon {
+      width: 18px;
+      height: 18px;
+      margin-right: 4px;
+    }
+    .export .text-button {
+      padding: 6px 8px;
     }
     .list {
       display: flex;

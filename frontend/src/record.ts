@@ -101,6 +101,19 @@ export function originName(localize: Localize, key: string, name: string | null)
   return key;
 }
 
+/** An origin as its chip on a card names it. */
+export function originLabel(origin: Origin, userNames: Map<string, string>, localize: Localize): string {
+  if (origin.kind === "automation" || origin.kind === "script") {
+    return origin.name ?? origin.entity_id ?? localize(`origin_${origin.kind}`);
+  }
+  if (origin.kind === "user") {
+    const name = origin.user_id ? userNames.get(origin.user_id) : undefined;
+    return name ? localize("origin_user", { name }) : localize("origin_user_unknown");
+  }
+  if (origin.kind === "integration") return origin.name ?? origin.integration ?? localize("origin_integration");
+  return localize(origin.kind === "system" ? "origin_system" : "origin_unknown");
+}
+
 export function originGlyph(origin: Origin, originIcons: Map<string, string>): TemplateResult {
   const own = origin.entity_id ? originIcons.get(origin.entity_id) : undefined;
   return own && customElements.get("ha-icon")

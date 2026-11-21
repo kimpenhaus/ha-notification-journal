@@ -51,6 +51,7 @@ export {
   mdiSpeaker,
   mdiSwapHorizontal,
   mdiTagOutline,
+  mdiTrayArrowDown,
   mdiUnfoldLessHorizontal,
   mdiUnfoldMoreHorizontal,
   mdiVideoOutline,
