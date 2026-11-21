@@ -8,7 +8,7 @@ Thanks for helping to improve Notification Journal!
 
 ## Pull requests
 
-1. Fork the repository and create a branch from `main`; its name must not contain `tags/` or end in `tags`, which the HACS check fails on.
+1. Fork the repository and create a branch from `main`; its name must not contain `tags/` or end in `tags`, or the HACS check fails.
 2. Title the pull request as a [Conventional Commit](https://www.conventionalcommits.org/) with a scope from
    `.github/workflows/pr-title.yml` (`fix(panel): …`) and a summary starting with a lowercase letter, without a
    final period: it becomes the commit message and the changelog entry, and a check enforces it.
@@ -20,4 +20,4 @@ Thanks for helping to improve Notification Journal!
 
 ## Releases
 
-Releases are made by the maintainer with release-please: after a beta of the version was tested, merging its release pull request publishes a GitHub release, which the Marketplace offers as an update.
+Releases are made by the maintainer with release-please: once a beta of the version has been tested, merging its release pull request publishes a GitHub release, which the Marketplace offers as an update.
