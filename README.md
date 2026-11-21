@@ -18,6 +18,7 @@ Home Assistant forgets a notification the moment it is sent. Notification Journa
   - Telegram: messages, captioned photos, videos and files, and polls sent with the Telegram bot's own actions, named after the chats
 - **Shows the answers**: the buttons of an actionable notification in the Companion app, which one was tapped, by whom and when, and the text typed into a reply button. Everyone sees their own answers; administrators see all.
 - **Shows what failed**: a notification whose sending failed, with Home Assistant's error, and a group that failed in part, with the error at each member that failed. Administrators send it again to what failed with one click.
+- **Send to anyone, through any medium**: administrators send any notification again to the targets they pick: the Companion app on a phone (with image, buttons and tag when the notification went through the Companion app), other notification services, spoken on a media player or announced on a voice satellite. Each send is recorded as a new notification that points to the one it repeats.
 - **Shows the media**: an image sent with a notification as a preview that opens in an overlay, a video with its image or first frame as a preview that plays in the card, audio as a link. Images that are gone fall back to a link.
 - **Tags**: the Companion app's tag of a notification as a chip; a click shows all notifications with that tag. A newer notification with the same tag marks the one it replaced on the phone, `clear_notification` the one it withdrew.
 - **Shows who it reached**: notify groups are resolved into the people and devices behind them; a person's current name and picture are shown, and automations, scripts and integrations appear under their current name.
@@ -101,6 +102,17 @@ The Companion app replaces a notification on a phone with a newer one of the sam
 A click on the tag of a card shows every notification with that tag, so you can follow what replaced what.
 
 Administrators can send a failed or partly failed notification again with *Send again*: Home Assistant calls the same action with the same text and data, buttons and tag included, for a group only to the members that failed, with what the group adds to their calls. Notify entities (`notify.send_message`) take text only, so they get title and message again. It is recorded as a new notification by hand that says it repeats a failed one; when the action fails again, that one is marked failed.
+
+*Send to …* on any card opens a dialog for administrators to send the notification again to targets they pick, several at once, after asking once more:
+
+| Target | Receives |
+|--------|----------|
+| The Companion app on a phone (`notify.mobile_app_…`) | title, message, image, buttons and tag when the notification went through the Companion app, else title and message |
+| Notify entities and other notify actions | title and message |
+| Media players, through `tts.speak` with a text-to-speech service to choose | the message, spoken |
+| Voice satellites, through `assist_satellite.announce` | the message, announced |
+
+A notification the Companion app spoke (`message: TTS`) goes out as its text; a command to the Companion app (`clear_notification`, `request_location_update` and the like) is not sent again. All targets are sent to at once; when some fail, the dialog keeps only those, with their errors, to try again. Every send is recorded like *Send again*, except to a target the journal does not record (*Do not record*).
 
 Failed pushes of the Companion app are read from what it logs at *warning* and above; with its log level set higher (`logger:` in `configuration.yaml`), they stay *sent*.
 
@@ -193,6 +205,15 @@ Each automation, script or integration with its notifications, folded or open.
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/automations-nordic-dark.png">
   <img src="docs/screenshots/automations-nordic-light.png" alt="Grouped by automation" width="720">
+</picture>
+
+### Send to …
+
+Sending a notification again to a phone and a kitchen speaker, with what each target receives.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/send-nordic-dark.png">
+  <img src="docs/screenshots/send-nordic-light.png" alt="Send to dialog" width="720">
 </picture>
 
 ### Failed

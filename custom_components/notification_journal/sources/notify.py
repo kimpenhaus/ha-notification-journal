@@ -33,7 +33,7 @@ from ..recipients import (
     legacy_group_members,
 )
 from ..store import NotificationStore, TagClose
-from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, Listener, as_list, new_record
+from . import ATTR_MESSAGE, ATTR_TITLE, TARGET_KEYS, Listener, Resend, as_list, new_record, sending_again
 
 GROUP_CALL_WINDOW = 5.0
 EVENT_NOTIFICATION_ACTION = "mobile_app_notification_action"
@@ -57,6 +57,12 @@ PREFIXED_COMMAND = re.compile(r"(command|kiosk)_[a-z_]+")
 """The commands of the Companion app on Android (`command_*`) and in kiosk mode on iOS (`kiosk_*`)."""
 
 
+def is_command(message: str) -> bool:
+    """Whether a message makes the Companion app do something, withdrawing a notification included, instead of showing
+    one."""
+    return message == CLEAR_NOTIFICATION or message in COMMANDS or PREFIXED_COMMAND.fullmatch(message) is not None
+
+
 @dataclass(frozen=True, slots=True)
 class _GroupCall:
     record_id: str | None
@@ -72,26 +78,12 @@ class _GroupCall:
 _group_call: ContextVar[_GroupCall | None] = ContextVar("notification_journal_group_call", default=None)
 
 
-@dataclass(slots=True)
-class Resend:
-    """A failed notification sent again in a call's context, and the record that call made."""
-
-    record_id: str
-    sent: str | None = None
-
-
-_resends: dict[str, Resend] = {}
-
-
 @contextmanager
 def resend(context_id: str, record_id: str) -> Iterator[Resend]:
-    """Record the call made in a context as sending a failed notification again, apart from any group call before."""
+    """Record the call made in a context as sending a notification again, apart from any group call before."""
     _group_call.set(None)
-    _resends[context_id] = entry = Resend(record_id)
-    try:
+    with sending_again(context_id, record_id) as entry:
         yield entry
-    finally:
-        _resends.pop(context_id, None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,8 +173,6 @@ class NotifySource:
         record = None
         if not excluded and not silent:
             record = self._record(event, service, data, channels, group=channels[0] if members is not None else None)
-            if (resend := _resends.get(event.context.id)) is not None:
-                record.resent_from, resend.sent = resend.record_id, record.id
         if tag is not None and reached:
             self._store.close_tagged(
                 TagClose(

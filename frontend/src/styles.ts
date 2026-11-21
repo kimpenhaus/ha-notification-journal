@@ -101,6 +101,46 @@ export const controlStyles = css`
   .empty p {
     margin: 8px 0;
   }
+  .text-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--primary-color);
+    font: inherit;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .text-button .icon {
+    width: 18px;
+    height: 18px;
+  }
+  .text-button:hover {
+    background: color-mix(in srgb, var(--primary-color) 10%, transparent);
+  }
+  .text-button[disabled] {
+    color: var(--disabled-text-color);
+    cursor: default;
+  }
+  .primary-button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 18px;
+    background: var(--primary-color);
+    color: var(--text-primary-color);
+    font: inherit;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .primary-button[disabled] {
+    opacity: 0.5;
+    cursor: default;
+  }
   .icon-button[disabled] {
     opacity: 0.35;
     cursor: default;

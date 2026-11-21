@@ -17,6 +17,13 @@ export function store(key: string, value: string): void {
 }
 
 /** The message of an error from the WebSocket connection or elsewhere. */
+/** Opens a dialog modally once its element has rendered, if it is still on the page and closed. */
+export function showWhenReady(host: { updateComplete: Promise<unknown> }, dialog: HTMLDialogElement): void {
+  void host.updateComplete.then(() => {
+    if (dialog.isConnected && !dialog.open) dialog.showModal();
+  });
+}
+
 export function errorMessage(error: unknown): string {
   if (typeof error === "object" && error && "message" in error) return String(error.message);
   return String(error);

@@ -141,3 +141,22 @@
     "person.sam": { entity_id: "person.sam", state: "home", attributes: { user_id: "user-sam", friendly_name: "Sam", entity_picture: sam.picture } },
   };
 })();
+
+// What the made-up home can send a notification to (the dialog "Send to …").
+window.README_TARGETS = {
+  notify_entity: [
+    { entity_id: "notify.kitchen_display", name: "Kitchen display" },
+    { entity_id: "notify.family_chat", name: "Family chat" },
+  ],
+  notify_action: [
+    { service: "mobile_app_alex_phone", name: "Alex's phone", companion: true },
+    { service: "mobile_app_sam_phone", name: "Sam's phone", companion: true },
+    { service: "family", name: "family", companion: false },
+  ],
+  engines: [{ entity_id: "tts.home_cloud", name: "Home Assistant Cloud" }],
+  speak: [
+    { entity_id: "media_player.kitchen", name: "Kitchen speaker" },
+    { entity_id: "media_player.living_room", name: "Living room speaker" },
+  ],
+  announce: [{ entity_id: "assist_satellite.hallway", name: "Hallway satellite" }],
+};

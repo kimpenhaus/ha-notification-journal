@@ -46,6 +46,7 @@ export {
   mdiSelectAll,
   mdiSelectRemove,
   mdiSendCheckOutline,
+  mdiSendOutline,
   mdiSortClockAscendingOutline,
   mdiSortClockDescendingOutline,
   mdiSpeaker,
