@@ -15,8 +15,8 @@ Thanks for helping to improve Notification Journal!
    Repairs to CI, tests, tooling or docs use `ci`, `test`, `chore` or `docs` with the scope of the part they
    concern (`test(store): …`), never `fix`, so they stay out of the changelog. A revert made with GitHub's
    button is renamed to `revert(<scope>): …`.
-3. The description becomes the commit body, where release-please reads `BREAKING CHANGE:` and `Release-As:`:
-   write them only when they are meant.
+3. The description becomes the commit body, where release-please reads `BREAKING CHANGE:` (or `BREAKING-CHANGE:`) and
+   `Release-As:` anywhere, even mid-sentence: write them only when they are meant.
 4. Keep changes focused – one topic per pull request.
 5. Work through the checklist of the pull request template; the commands are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#commands).
 
