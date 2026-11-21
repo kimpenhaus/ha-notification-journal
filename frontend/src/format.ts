@@ -28,6 +28,22 @@ export function numberFormatter(language: string): Intl.NumberFormat {
   return cached;
 }
 
+/** The locales Home Assistant formats numbers with for each choice of the profile's number format. */
+const NUMBER_FORMAT_LOCALES: Record<string, string | undefined> = {
+  comma_decimal: "en-US",
+  decimal_comma: "de",
+  space_comma: "fr",
+  quote_decimal: "de-CH",
+  system: undefined,
+};
+
+/** Whether numbers are written with a decimal comma for this user, as their profile's number format says. */
+export function decimalComma(language: string, numberFormat: string | undefined): boolean {
+  const locale = numberFormat && numberFormat in NUMBER_FORMAT_LOCALES ? NUMBER_FORMAT_LOCALES[numberFormat] : language;
+  const parts = new Intl.NumberFormat(locale).formatToParts(1.5);
+  return parts.find((part) => part.type === "decimal")?.value === ",";
+}
+
 /** A share in whole percent, or a dash without a total. */
 export function percentText(language: string, part: number, total: number): string {
   return total ? `${numberFormatter(language).format(Math.round((100 * part) / total))} %` : "–";

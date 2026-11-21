@@ -29,13 +29,15 @@ const COLUMNS = [
 /** A spreadsheet reads a cell that starts like this as a formula, also after blanks it trims. */
 const FORMULA = /^[\s]*[=+\-@]|^[\t\r\n]/;
 
-/** The records as a file: JSON as the API returns them, CSV with one row per notification. */
+/** The records as a file: JSON as the API returns them, CSV with one row per notification, separated as the spreadsheet
+ * of a user who writes decimals with a comma expects: by semicolons. */
 export function exportFile(
   format: ExportFormat,
   records: NotificationRecord[],
   userNames: Map<string, string>,
   localize: Localize,
   now: Date,
+  separator: "," | ";",
 ): { name: string; type: string; content: string } {
   const two = (value: number) => String(value).padStart(2, "0");
   const stamp = `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}-${two(now.getHours())}${two(now.getMinutes())}`;
@@ -44,7 +46,11 @@ export function exportFile(
     const content = JSON.stringify({ exported: now.toISOString(), count: records.length, records }, null, 2);
     return { name, type: "application/json", content: `${content}\n` };
   }
-  const rows = [COLUMNS.join(","), ...records.map((record) => row(record, userNames, localize).map(cell).join(","))];
+  const quoted = (value: string) => cell(value, separator);
+  const rows = [
+    COLUMNS.join(separator),
+    ...records.map((record) => row(record, userNames, localize).map(quoted).join(separator)),
+  ];
   return { name, type: "text/csv;charset=utf-8", content: `﻿${rows.join("\r\n")}\r\n` };
 }
 
@@ -93,7 +99,7 @@ function row(record: NotificationRecord, userNames: Map<string, string>, localiz
   ];
 }
 
-function cell(value: string): string {
+function cell(value: string, separator: string): string {
   const text = FORMULA.test(value) ? `'${value}` : value;
-  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  return /["\r\n]/.test(text) || text.includes(separator) ? `"${text.replaceAll('"', '""')}"` : text;
 }

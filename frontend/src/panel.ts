@@ -2,7 +2,7 @@ import { css, html, LitElement, nothing, type PropertyValues, type TemplateResul
 import { repeat } from "lit/directives/repeat.js";
 
 import { download, type ExportFormat, exportFile } from "./export";
-import { type Clock, dayKey, dayLabel, formatter, zoneName } from "./format";
+import { type Clock, dayKey, dayLabel, decimalComma, formatter, zoneName } from "./format";
 import {
   icon,
   mdiArchiveArrowDownOutline,
@@ -1069,7 +1069,9 @@ export class NotificationJournalPanel extends LitElement {
         for (const record of page.records) records.set(record.id, record);
         if (page.records.length < EXPORT_PAGE) break;
       }
-      download(exportFile(format, [...records.values()], this._lookups().userNames, localize, new Date()));
+      const locale = this._hass!.locale;
+      const separator = decimalComma(locale?.language ?? this._hass!.language, locale?.number_format) ? ";" : ",";
+      download(exportFile(format, [...records.values()], this._lookups().userNames, localize, new Date(), separator));
       this._notice = countText(localize, records.size, "export_done_one", "export_done");
     } catch (error) {
       this._notice = localize("export_failed", { message: errorMessage(error) });
