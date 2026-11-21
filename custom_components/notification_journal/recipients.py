@@ -8,6 +8,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from .models import Recipient, RecipientKind
@@ -129,6 +130,14 @@ def mobile_app_entry(hass: HomeAssistant, service: str) -> ConfigEntry | None:
         if entry.data.get(ATTR_WEBHOOK_ID) == webhook_id:
             return entry
     return None
+
+
+def phone_name(hass: HomeAssistant, entry: ConfigEntry) -> str:
+    """Return the name of a phone with the Companion app as Home Assistant shows its device, else its own name."""
+    for device in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id):
+        if name := (device.name_by_user or device.name or "").strip():
+            return name
+    return entry.title.strip()
 
 
 class RecipientResolver:
