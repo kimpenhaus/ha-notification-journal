@@ -3,17 +3,20 @@ on media players, announcements on voice satellites."""
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 
 from .models import NotificationRecord
-from .recipients import NOTIFY_DOMAIN, SEND_MESSAGE, companion_channels, mobile_app_entry
+from .recipients import NOTIFY_DOMAIN, SEND_MESSAGE, companion_channels, mobile_app_entry, phone_name
 from .sources import ATTR_MESSAGE, ATTR_TITLE
 from .sources.speech import ATTR_MEDIA_PLAYERS, MEDIA_PLAYER_DOMAIN, SATELLITE_DOMAIN, TTS_DOMAIN
 
@@ -47,14 +50,26 @@ class SendCall:
 
 def targets(hass: HomeAssistant, record: NotificationRecord | None) -> dict[str, Any]:
     """What a notification can be sent to, by kind, each named as Home Assistant shows it, and whether the Companion
-    app's actions get the notification's data too."""
+    app's actions get the notification's data too. A phone with the Companion app's action is listed once, by that
+    action: its notify entity sends only title and message."""
     companion = companion_channels(hass)
-    actions = sorted(
+    services = [
         service for service in hass.services.async_services_for_domain(NOTIFY_DOMAIN) if service not in NOT_A_TARGET
-    )
+    ]
+    phones = {
+        service: mobile_app_entry(hass, service) for service in services if f"{NOTIFY_DOMAIN}.{service}" in companion
+    }
+    registry = er.async_get(hass)
+    phone_entities = {
+        entity.entity_id
+        for entry in phones.values()
+        if entry
+        for entity in er.async_entries_for_config_entry(registry, entry.entry_id)
+    }
+    actions = [_action(hass, service, phones) for service in services]
     return {
-        NOTIFY_ENTITY: _entities(hass, NOTIFY_DOMAIN),
-        NOTIFY_ACTION: [_action(hass, service, f"{NOTIFY_DOMAIN}.{service}" in companion) for service in actions],
+        NOTIFY_ENTITY: _entities(hass, NOTIFY_DOMAIN, phone_entities),
+        NOTIFY_ACTION: sorted(actions, key=lambda action: action["name"].casefold()),
         "engines": _entities(hass, TTS_DOMAIN),
         SPEAK: _entities(hass, MEDIA_PLAYER_DOMAIN),
         ANNOUNCE: _entities(hass, SATELLITE_DOMAIN),
@@ -101,12 +116,18 @@ def calls(hass: HomeAssistant, record: NotificationRecord, chosen: list[dict[str
     return found
 
 
-def _action(hass: HomeAssistant, service: str, companion: bool) -> dict[str, Any]:
-    """A legacy notify action, named after the phone for the Companion app's."""
-    entry = mobile_app_entry(hass, service) if companion else None
-    return {"service": service, "name": entry.title if entry else service, "companion": companion}
+def _action(hass: HomeAssistant, service: str, phones: dict[str, ConfigEntry | None]) -> dict[str, Any]:
+    """A legacy notify action, the Companion app's named after its phone."""
+    entry = phones.get(service)
+    name = (phone_name(hass, entry) if entry else "") or service
+    return {"service": service, "name": name, "companion": service in phones}
 
 
-def _entities(hass: HomeAssistant, domain: str) -> list[dict[str, str]]:
+def _entities(hass: HomeAssistant, domain: str, skip: Collection[str] = ()) -> list[dict[str, str]]:
+    """The available entities of a domain by name, without those to skip."""
     states: list[State] = sorted(hass.states.async_all(domain), key=lambda state: state.name.casefold())
-    return [{"entity_id": state.entity_id, "name": state.name} for state in states if state.state != "unavailable"]
+    return [
+        {"entity_id": state.entity_id, "name": state.name}
+        for state in states
+        if state.state != "unavailable" and state.entity_id not in skip
+    ]

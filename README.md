@@ -107,7 +107,7 @@ Administrators can send a failed or partly failed notification again with *Send 
 
 | Target | Receives |
 |--------|----------|
-| The Companion app on a phone (`notify.mobile_app_…`) | title, message, image, buttons and tag when the notification went through the Companion app, else title and message |
+| The Companion app on a phone (`notify.mobile_app_…`), named like the phone's device in Home Assistant; the phone's notify entity is not listed again | title, message, image, buttons and tag when the notification went through the Companion app, else title and message |
 | Notify entities and other notify actions | title and message |
 | Media players, through `tts.speak` with a text-to-speech service to choose | the message, spoken |
 | Voice satellites, through `assist_satellite.announce` | the message, announced |

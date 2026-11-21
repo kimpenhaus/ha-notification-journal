@@ -4,6 +4,8 @@ from unittest.mock import patch
 
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
@@ -199,6 +201,42 @@ async def test_the_targets_are_listed_by_kind(hass: HomeAssistant, hass_ws_clien
     assert result["engines"] == [{"entity_id": "tts.cloud", "name": "Cloud"}]
     assert result["speak"] == [{"entity_id": "media_player.kitchen", "name": "Kitchen speaker"}]
     assert result["announce"] == [{"entity_id": "assist_satellite.office", "name": "Office satellite"}]
+
+
+async def test_a_phone_is_listed_once_by_its_companion_action_named_like_its_device(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+) -> None:
+    _service(hass, "notify", "mobile_app_anna")
+    _service(hass, "notify", "mobile_app_ben")
+    await _setup(hass)
+    anna = MockConfigEntry(domain="mobile_app", title="alaska", data={"device_id": "phone-1"})
+    ben = MockConfigEntry(domain="mobile_app", title="Ben's phone ", data={"device_id": "phone-2"})
+    anna.add_to_hass(hass)
+    ben.add_to_hass(hass)
+    devices = dr.async_get(hass)
+    device = devices.async_get_or_create(
+        config_entry_id=anna.entry_id, identifiers={("mobile_app", "phone-1")}, name="alaska"
+    )
+    devices.async_update_device(device.id, name_by_user="Anna's phone")
+    er.async_get(hass).async_get_or_create(
+        "notify", "mobile_app", "phone-1", config_entry=anna, device_id=device.id, suggested_object_id="anna"
+    )
+    hass.states.async_set("notify.anna", "unknown", {"friendly_name": "Anna's phone"})
+    entries = {"mobile_app_anna": anna, "mobile_app_ben": ben}
+    client = await hass_ws_client(hass)
+
+    with (
+        patch.object(send, "companion_channels", return_value=COMPANION),
+        patch.object(send, "mobile_app_entry", side_effect=lambda _, service: entries[service]),
+    ):
+        await client.send_json_auto_id({"type": f"{DOMAIN}/targets"})
+        result = (await client.receive_json())["result"]
+
+    assert result["notify_action"] == [
+        {"service": "mobile_app_anna", "name": "Anna's phone", "companion": True},
+        {"service": "mobile_app_ben", "name": "Ben's phone", "companion": True},
+    ]
+    assert result["notify_entity"] == [{"entity_id": "notify.kitchen_display", "name": "Kitchen display"}]
 
 
 async def test_the_targets_say_whether_the_companion_app_gets_the_data(
