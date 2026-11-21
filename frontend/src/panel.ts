@@ -1,6 +1,7 @@
 import { css, html, LitElement, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 
+import { download, type ExportFormat, exportFile } from "./export";
 import { type Clock, dayKey, dayLabel, formatter, zoneName } from "./format";
 import {
   icon,
@@ -25,6 +26,7 @@ import {
   mdiSortClockAscendingOutline,
   mdiSortClockDescendingOutline,
   mdiTagOutline,
+  mdiTrayArrowDown,
   mdiUnfoldLessHorizontal,
   mdiUnfoldMoreHorizontal,
 } from "./icons";
@@ -54,6 +56,7 @@ import { errorMessage, store, stored } from "./util";
 const PAGE_SIZE = 50;
 const DAY_PAGE_SIZE = 200;
 const ARCHIVE_BATCH = 200;
+const EXPORT_PAGE = 200;
 const SEARCH_DELAY = 300;
 const SUBSCRIBE_RETRY = 5000;
 const PERIODS: Record<Exclude<Period, "">, number> = { day: 1, week: 7, month: 30, quarter: 90 };
@@ -119,6 +122,7 @@ export class NotificationJournalPanel extends LitElement {
     _notice: { state: true },
     _archived: { state: true },
     _selecting: { state: true },
+    _exporting: { state: true },
     _selected: { state: true },
     _screen: { state: true },
   };
@@ -146,6 +150,7 @@ export class NotificationJournalPanel extends LitElement {
   declare _notice: string | undefined;
   declare _archived: boolean;
   declare _selecting: boolean;
+  declare _exporting: boolean;
   declare _selected: Set<string>;
   declare _screen: "list" | "statistics";
 
@@ -181,6 +186,7 @@ export class NotificationJournalPanel extends LitElement {
     this._dayLoads = new Map();
     this._archived = false;
     this._selecting = false;
+    this._exporting = false;
     this._selected = new Set();
     this._screen = "list";
     this._search = "";
@@ -1000,6 +1006,7 @@ export class NotificationJournalPanel extends LitElement {
             <span>${localize(filters.newestFirst ? "newest_first" : "oldest_first")}</span>
           </button>
           <span class="spacer"></span>
+          ${this._selecting || !this._records.length ? nothing : this._exportMenu(localize)}
           ${
             this._selecting || !this._records.length
               ? nothing
@@ -1024,6 +1031,47 @@ export class NotificationJournalPanel extends LitElement {
         ${this._keptNotice(localize)}
       </div>
     `;
+  }
+
+  private _exportMenu(localize: Localize): TemplateResult {
+    return html`<label class="text-button export ${this._exporting ? "busy" : ""}">
+      ${icon(mdiTrayArrowDown)}<span>${localize(this._exporting ? "exporting" : "export")}</span>
+      <select
+        aria-label=${localize("export")}
+        ?disabled=${this._exporting}
+        @change=${(event: Event) => {
+          const select = event.target as HTMLSelectElement;
+          const format = select.value as ExportFormat;
+          select.value = "";
+          if (format) void this._export(format);
+        }}
+      >
+        <option value="" selected hidden></option>
+        <option value="csv">${localize("export_csv")}</option>
+        <option value="json">${localize("export_json")}</option>
+      </select>
+    </label>`;
+  }
+
+  /** Save every notification the list shows with its filters, page by page, as a file. */
+  private async _export(format: ExportFormat): Promise<void> {
+    this._notice = undefined;
+    this._exporting = true;
+    const localize = this._localize;
+    try {
+      const records = new Map<string, NotificationRecord>();
+      for (let offset = 0; ; offset += EXPORT_PAGE) {
+        const page = await this._list({ group_by: undefined, limit: EXPORT_PAGE, offset });
+        for (const record of page.records) records.set(record.id, record);
+        if (page.records.length < EXPORT_PAGE) break;
+      }
+      download(exportFile(format, [...records.values()], this._lookups().userNames, new Date()));
+      this._notice = countText(localize, records.size, "export_done_one", "export_done");
+    } catch (error) {
+      this._notice = localize("export_failed", { message: errorMessage(error) });
+    } finally {
+      this._exporting = false;
+    }
   }
 
   /** Say so when the list opened from the statistics reaches back further than single notifications are kept. */
@@ -1357,9 +1405,23 @@ export class NotificationJournalPanel extends LitElement {
     .text-button:hover {
       background: color-mix(in srgb, var(--primary-color) 10%, transparent);
     }
-    .text-button[disabled] {
+    .text-button[disabled],
+    .export.busy {
       color: var(--disabled-text-color);
       cursor: default;
+    }
+    .export {
+      position: relative;
+    }
+    .export select {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      border: none;
+      opacity: 0;
+      cursor: inherit;
     }
     .list {
       display: flex;
