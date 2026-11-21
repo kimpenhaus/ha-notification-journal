@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0](https://github.com/kimpenhaus/ha-notification-journal/compare/v0.5.0...v0.6.0) (2026-11-21)
+
+
+### New
+
+* **panel:** export the journal as csv or json ([#125](https://github.com/kimpenhaus/ha-notification-journal/issues/125)) ([e51fc68](https://github.com/kimpenhaus/ha-notification-journal/commit/e51fc68262bba46a9e5853a70c93b899c15faec6))
+* **panel:** send any notification to any target ([#129](https://github.com/kimpenhaus/ha-notification-journal/issues/129)) ([5fbef9c](https://github.com/kimpenhaus/ha-notification-journal/commit/5fbef9c5ed32ee32e245dacdc8e3ad5271bec7f0))
+
+
+### Fixed
+
+* **panel:** list each phone once in send to ([#130](https://github.com/kimpenhaus/ha-notification-journal/issues/130)) ([b496fb0](https://github.com/kimpenhaus/ha-notification-journal/commit/b496fb09ab4f1e29fa4600e85cdc4e55d96b8afe))
+* **panel:** separate csv as the number format expects ([#128](https://github.com/kimpenhaus/ha-notification-journal/issues/128)) ([92199ad](https://github.com/kimpenhaus/ha-notification-journal/commit/92199ad16b554a365571f7001dd07984cbbbebce))
+
 ## [0.5.0](https://github.com/kimpenhaus/ha-notification-journal/compare/v0.4.0...v0.5.0) (2026-11-21)
 
 
