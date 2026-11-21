@@ -177,7 +177,7 @@ export interface HomeAssistant {
   connection: HassConnection;
   user?: { id: string; name: string; is_admin: boolean };
   language: string;
-  locale?: { language: string; time_zone?: "local" | "server"; first_weekday?: string };
+  locale?: { language: string; number_format?: string; time_zone?: "local" | "server"; first_weekday?: string };
   config: { time_zone: string };
   states: Record<string, HassEntityState>;
   dockedSidebar?: "docked" | "always_hidden" | "auto";
