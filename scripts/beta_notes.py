@@ -13,12 +13,14 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$")
 SUBJECT = re.compile(r"^(?P<type>\w+)(?:\((?P<scope>[^)]+)\))?(?P<breaking>!)?: (?P<text>.+?)(?: \(#(?P<pr>\d+)\))?$")
 BREAKING = "⚠ BREAKING CHANGES"
+FOOTER = re.compile(r"^BREAKING[ -]CHANGE: (?P<note>.+)$", re.MULTILINE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,26 +28,6 @@ class Commit:
     sha: str
     subject: str
     body: str = ""
-
-
-def previous_tag(tag: str, tags: list[str]) -> str | None:
-    """The beta before this one of the same version, else the newest release before that version."""
-    if (match := TAG.match(tag)) is None or match[4] is None:
-        raise ValueError(f"not a beta tag: {tag}")
-    version, number = tuple(map(int, match.groups()[:3])), int(match[4])
-    betas, releases = [], []
-    for other in tags:
-        if (found := TAG.match(other)) is None:
-            continue
-        other_version = tuple(map(int, found.groups()[:3]))
-        if found[4] is None:
-            if other_version < version:
-                releases.append((other_version, other))
-        elif other_version == version and int(found[4]) < number:
-            betas.append((int(found[4]), other))
-    if betas:
-        return max(betas)[1]
-    return max(releases)[1] if releases else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,11 +41,22 @@ class Round:
 
 
 def rounds(tag: str, tags: list[str]) -> list[tuple[str, str | None]]:
-    """This beta and each earlier beta of its version, newest first, each with the tag it is measured from."""
-    found = [(tag, previous_tag(tag, tags))]
-    while (previous := found[-1][1]) is not None and TAG.match(previous)[4] is not None:
-        found.append((previous, previous_tag(previous, tags)))
-    return found
+    """This beta and each earlier beta of its version, newest first, each with the tag it is measured from: the beta
+    before it, else the newest release below the version."""
+    if (match := TAG.match(tag)) is None or match[4] is None:
+        raise ValueError(f"not a beta tag: {tag}")
+    version, number = tuple(map(int, match.groups()[:3])), int(match[4])
+    betas, releases = [], []
+    for other in tags:
+        if (found := TAG.match(other)) is None:
+            continue
+        other_version = tuple(map(int, found.groups()[:3]))
+        if found[4] is None and other_version < version:
+            releases.append((other_version, other))
+        elif found[4] is not None and other_version == version and int(found[4]) < number:
+            betas.append((int(found[4]), other))
+    chain = [tag, *(beta for _, beta in sorted(betas, reverse=True)), max(releases)[1] if releases else None]
+    return list(pairwise(chain))
 
 
 def sections(config: dict) -> dict[str, str]:
@@ -89,35 +82,36 @@ def _block(beta: Round, titles: dict[str, str], url: str) -> str:
         if (match := SUBJECT.match(commit.subject)) is None:
             continue
         scope, subject, pr = match["scope"], match["text"], match["pr"]
-        line = f"* {f'**{scope}:** ' if scope else ''}{subject}"
-        if pr:
-            line += f" ([#{pr}]({url}/issues/{pr}))"
-        line += f" ([{commit.sha[:7]}]({url}/commit/{commit.sha}))"
-        key = (scope or subject).lower()
-        if match["breaking"] or "BREAKING CHANGE:" in commit.body:
-            grouped.setdefault(BREAKING, []).append((key, line))
+        links = (f" ([#{pr}]({url}/issues/{pr}))" if pr else "") + f" ([{commit.sha[:7]}]({url}/commit/{commit.sha}))"
+        prefix = f"**{scope}:** " if scope else ""
+        footer = FOOTER.search(commit.body)
+        if match["breaking"] or footer:
+            note = footer["note"] if footer else subject
+            grouped.setdefault(BREAKING, []).append(((scope or note).lower(), f"* {prefix}{note}{links}"))
         if (title := titles.get(match["type"])) is not None:
-            grouped.setdefault(title, []).append((key, line))
+            grouped.setdefault(title, []).append(((scope or subject).lower(), f"* {prefix}{subject}{links}"))
     for title in (title for title in [BREAKING, *dict.fromkeys(titles.values())] if title in grouped):
         text += f"\n\n### {title}\n\n" + "\n".join(line for _, line in sorted(grouped[title])) + "\n"
     return text
 
 
 def _git(*args: str) -> str:
-    return subprocess.run(["git", *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout
+    env = {**os.environ, "TZ": "UTC"}
+    return subprocess.run(["git", *args], cwd=ROOT, env=env, check=True, capture_output=True, text=True).stdout
 
 
 def _tagged(tag: str) -> str:
-    return _git("for-each-ref", "--format=%(creatordate:short)", f"refs/tags/{tag}").strip()
+    """The day the tag was made, in UTC as release-please dates a release."""
+    return _git("for-each-ref", "--format=%(creatordate:format-local:%Y-%m-%d)", f"refs/tags/{tag}").strip()
 
 
 def _commits(previous: str | None, tag: str) -> list[Commit]:
     log = _git("log", "--format=%H%x1f%s%x1f%b%x1e", f"{previous}..{tag}" if previous else tag)
-    return [Commit(*entry.strip("\n").split("\x1f")) for entry in log.split("\x1e") if entry.strip()]
+    return [Commit(*entry.strip("\n").split("\x1f", 2)) for entry in log.split("\x1e") if entry.strip()]
 
 
 def main(tag: str) -> None:
-    tags = _git("tag", "--list", "v*").split()
+    tags = _git("tag", "--list", "v*", "--merged", tag).split()
     betas = [Round(beta, previous, _tagged(beta), _commits(previous, beta)) for beta, previous in rounds(tag, tags)]
     config = json.loads((ROOT / "release-please-config.json").read_text())
     repo = os.environ.get("GITHUB_REPOSITORY", "kimpenhaus/ha-notification-journal")
