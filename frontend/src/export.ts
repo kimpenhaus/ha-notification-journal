@@ -1,5 +1,7 @@
-import { notificationTag } from "./media";
-import type { NotificationRecord, Origin } from "./types";
+import type { Localize } from "./localize";
+import { notificationTag, spokenText } from "./media";
+import { originLabel } from "./record";
+import type { NotificationRecord } from "./types";
 
 export type ExportFormat = "csv" | "json";
 
@@ -24,23 +26,25 @@ const COLUMNS = [
   "id",
 ] as const;
 
-/** A spreadsheet reads a cell that starts like this as a formula. */
-const FORMULA = /^[=+\-@\t\r]/;
+/** A spreadsheet reads a cell that starts like this as a formula, also after blanks it trims. */
+const FORMULA = /^[\s]*[=+\-@]|^[\t\r\n]/;
 
 /** The records as a file: JSON as the API returns them, CSV with one row per notification. */
 export function exportFile(
   format: ExportFormat,
   records: NotificationRecord[],
   userNames: Map<string, string>,
+  localize: Localize,
   now: Date,
 ): { name: string; type: string; content: string } {
-  const stamp = now.toISOString().slice(0, 16).replace("T", "-").replace(":", "");
+  const two = (value: number) => String(value).padStart(2, "0");
+  const stamp = `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())}-${two(now.getHours())}${two(now.getMinutes())}`;
   const name = `notification-journal-${stamp}.${format}`;
   if (format === "json") {
     const content = JSON.stringify({ exported: now.toISOString(), count: records.length, records }, null, 2);
     return { name, type: "application/json", content: `${content}\n` };
   }
-  const rows = [COLUMNS.join(","), ...records.map((record) => row(record, userNames).map(cell).join(","))];
+  const rows = [COLUMNS.join(","), ...records.map((record) => row(record, userNames, localize).map(cell).join(","))];
   return { name, type: "text/csv;charset=utf-8", content: `﻿${rows.join("\r\n")}\r\n` };
 }
 
@@ -50,22 +54,25 @@ export function download(file: { name: string; type: string; content: string }):
   const link = document.createElement("a");
   link.href = url;
   link.download = file.name;
+  link.hidden = true;
+  document.body.append(link);
   link.click();
-  URL.revokeObjectURL(url);
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function row(record: NotificationRecord, userNames: Map<string, string>): string[] {
-  const by = (userId: string | null) => (userId && userNames.get(userId)) || userId || "";
+function row(record: NotificationRecord, userNames: Map<string, string>, localize: Localize): string[] {
+  const by = (userId: string | null) => (userId && userNames.get(userId)) || localize("someone");
   return [
     record.time,
     record.status,
     record.title ?? "",
-    record.message,
+    spokenText(record) ?? record.message,
     record.source,
     record.channel,
     record.group ?? "",
     record.recipients.map((recipient) => recipient.name).join("; "),
-    originText(record.origin, by),
+    originLabel(record.origin, userNames, localize),
     record.origin.entity_id ?? "",
     notificationTag(record) ?? "",
     record.error ?? "",
@@ -80,15 +87,10 @@ function row(record: NotificationRecord, userNames: Map<string, string>): string
       })
       .join("; "),
     record.status_time ?? "",
-    record.status_by ? originText(record.status_by, by) : "",
+    record.status_by ? originLabel(record.status_by, userNames, localize) : "",
     record.resent_from ?? "",
     record.id,
   ];
-}
-
-function originText(origin: Origin, by: (userId: string | null) => string): string {
-  if (origin.kind === "user") return by(origin.user_id) || "user";
-  return origin.name ?? origin.entity_id ?? origin.integration ?? origin.kind;
 }
 
 function cell(value: string): string {

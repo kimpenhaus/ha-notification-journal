@@ -1010,7 +1010,7 @@ export class NotificationJournalPanel extends LitElement {
           ${
             this._selecting || !this._records.length
               ? nothing
-              : html`<button class="text-button" @click=${() => (this._selecting = true)}>
+              : html`<button class="text-button" ?disabled=${this._exporting} @click=${() => (this._selecting = true)}>
                   ${icon(mdiCheckboxMultipleMarkedOutline)}${localize("select")}
                 </button>`
           }
@@ -1034,38 +1034,42 @@ export class NotificationJournalPanel extends LitElement {
   }
 
   private _exportMenu(localize: Localize): TemplateResult {
-    return html`<label class="text-button export ${this._exporting ? "busy" : ""}">
-      ${icon(mdiTrayArrowDown)}<span>${localize(this._exporting ? "exporting" : "export")}</span>
-      <select
-        aria-label=${localize("export")}
+    const format = (kind: ExportFormat) =>
+      html`<button
+        class="text-button"
+        title=${localize(kind === "csv" ? "export_csv" : "export_json")}
         ?disabled=${this._exporting}
-        @change=${(event: Event) => {
-          const select = event.target as HTMLSelectElement;
-          const format = select.value as ExportFormat;
-          select.value = "";
-          if (format) void this._export(format);
-        }}
+        @click=${() => void this._export(kind)}
       >
-        <option value="" selected hidden></option>
-        <option value="csv">${localize("export_csv")}</option>
-        <option value="json">${localize("export_json")}</option>
-      </select>
-    </label>`;
+        ${kind.toUpperCase()}
+      </button>`;
+    return html`<span class="export" role="group" aria-label=${localize("export")}>
+      ${icon(mdiTrayArrowDown)}<span>${localize(this._exporting ? "exporting" : "export")}</span>
+      ${format("csv")}${format("json")}
+    </span>`;
   }
 
-  /** Save every notification the list shows with its filters, page by page, as a file. */
+  /** Save every notification the list shows, as its filters stand when the export starts, page by page, as a file. */
   private async _export(format: ExportFormat): Promise<void> {
     this._notice = undefined;
     this._exporting = true;
     const localize = this._localize;
+    const query: Record<string, unknown> = { ...this._query(), group_by: undefined };
+    query.until ??= new Date().toISOString();
     try {
       const records = new Map<string, NotificationRecord>();
       for (let offset = 0; ; offset += EXPORT_PAGE) {
-        const page = await this._list({ group_by: undefined, limit: EXPORT_PAGE, offset });
+        const page = await this._hass!.connection.sendMessagePromise<Page>({
+          type: "notification_journal/list",
+          ...query,
+          limit: EXPORT_PAGE,
+          offset,
+        });
+        if (!this.isConnected) return;
         for (const record of page.records) records.set(record.id, record);
         if (page.records.length < EXPORT_PAGE) break;
       }
-      download(exportFile(format, [...records.values()], this._lookups().userNames, new Date()));
+      download(exportFile(format, [...records.values()], this._lookups().userNames, localize, new Date()));
       this._notice = countText(localize, records.size, "export_done_one", "export_done");
     } catch (error) {
       this._notice = localize("export_failed", { message: errorMessage(error) });
@@ -1405,23 +1409,25 @@ export class NotificationJournalPanel extends LitElement {
     .text-button:hover {
       background: color-mix(in srgb, var(--primary-color) 10%, transparent);
     }
-    .text-button[disabled],
-    .export.busy {
+    .text-button[disabled] {
       color: var(--disabled-text-color);
       cursor: default;
     }
     .export {
-      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding-left: 10px;
+      color: var(--secondary-text-color);
+      font-size: 0.875rem;
     }
-    .export select {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      padding: 0;
-      border: none;
-      opacity: 0;
-      cursor: inherit;
+    .export > .icon {
+      width: 18px;
+      height: 18px;
+      margin-right: 4px;
+    }
+    .export .text-button {
+      padding: 6px 8px;
     }
     .list {
       display: flex;
