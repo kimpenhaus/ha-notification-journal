@@ -34,6 +34,7 @@ import { countText, type Localize, localizer } from "./localize";
 import { type Signer, signPath } from "./media";
 import { originGlyph, originName } from "./record";
 import type { NotificationJournalStatistics } from "./statistics";
+import "./send";
 import "./statistics";
 import { controlStyles } from "./styles";
 import type {
@@ -123,6 +124,7 @@ export class NotificationJournalPanel extends LitElement {
     _archived: { state: true },
     _selecting: { state: true },
     _exporting: { state: true },
+    _sending: { state: true },
     _selected: { state: true },
     _screen: { state: true },
   };
@@ -151,6 +153,7 @@ export class NotificationJournalPanel extends LitElement {
   declare _archived: boolean;
   declare _selecting: boolean;
   declare _exporting: boolean;
+  declare _sending: NotificationRecord | undefined;
   declare _selected: Set<string>;
   declare _screen: "list" | "statistics";
 
@@ -200,6 +203,7 @@ export class NotificationJournalPanel extends LitElement {
     this._unsubscribeNow();
     this._subscribe(true);
   };
+  private readonly _sendTo = (record: NotificationRecord) => (this._sending = record);
   private readonly _resend = (recordId: string) =>
     this._hass!.connection.sendMessagePromise({ type: "notification_journal/resend", record_id: recordId });
 
@@ -872,6 +876,19 @@ export class NotificationJournalPanel extends LitElement {
       <div class="content">
         <div class="wrapper">${this._filterBar(localize)} ${this._body(localize)}</div>
       </div>
+      ${
+        this._sending && this._hass
+          ? html`<notification-journal-send
+              .record=${this._sending}
+              .connection=${this._hass.connection}
+              .localize=${localize}
+              @send-done=${(event: CustomEvent<{ notice?: string }>) => {
+                this._sending = undefined;
+                if (event.detail.notice) this._notice = event.detail.notice;
+              }}
+            ></notification-journal-send>`
+          : nothing
+      }
     `;
   }
 
@@ -1193,6 +1210,7 @@ export class NotificationJournalPanel extends LitElement {
                       .originIcons=${originIcons}
                       .sign=${this._sign}
                       .resend=${admin ? this._resend : undefined}
+                      .sendTo=${admin && !this._selecting ? this._sendTo : undefined}
                       ?admin=${admin}
                       ?showDate=${byOrigin}
                       ?selectable=${this._selecting}

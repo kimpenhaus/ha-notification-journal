@@ -22,6 +22,7 @@ from .const import CONF_NON_ADMIN_VISIBILITY, DEFAULT_OPTIONS, DOMAIN, SIGNAL_CH
 from .models import CHANNEL_SEPARATOR, NotificationRecord, RecipientKind
 from .origin import OriginNames, origin_key
 from .recipients import NOTIFY_DOMAIN, SEND_MESSAGE, member_defaults
+from .send import TARGET, calls, targets
 from .sources import ATTR_MESSAGE, ATTR_TITLE
 from .sources.notify import resend
 from .statistics import FAILED, PERIOD_KINDS, period, summarize
@@ -44,6 +45,8 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_delete)
     websocket_api.async_register_command(hass, ws_archive)
     websocket_api.async_register_command(hass, ws_resend)
+    websocket_api.async_register_command(hass, ws_targets)
+    websocket_api.async_register_command(hass, ws_send)
 
 
 FILTERS = {
@@ -386,6 +389,48 @@ def _calls_again(hass: HomeAssistant, record: NotificationRecord) -> list[tuple[
                 add_defaults(data, defaults)
         calls.append((service, data))
     return calls
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/targets"})
+@websocket_api.require_admin
+@callback
+def ws_targets(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """What a notification can be sent to; administrators only."""
+    connection.send_result(msg["id"], targets(hass))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/send",
+        vol.Required("record_id"): str,
+        vol.Required("targets"): vol.All([TARGET], vol.Length(min=1, max=MAX_LIMIT)),
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_send(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Send a notification again to the chosen targets, each call on its own; administrators only."""
+    if (scope := _store_and_scope(hass, connection, msg)) is None:
+        return
+    store, _ = scope
+    record = await store.async_get(msg["record_id"])
+    if record is None:
+        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, "Notification not found")
+        return
+    errors = []
+    for call in calls(hass, record, msg["targets"]):
+        context = connection.context(msg)
+        with resend(context.id, record.id) as sent:
+            try:
+                await hass.services.async_call(call.domain, call.service, call.data, blocking=True, context=context)
+            except (HomeAssistantError, vol.Invalid) as err:
+                errors.append(str(err))
+                if sent.sent is not None:
+                    store.mark_failed(sent.sent, None, str(err))
+    if errors:
+        connection.send_error(msg["id"], websocket_api.ERR_HOME_ASSISTANT_ERROR, "; ".join(errors))
+        return
+    connection.send_result(msg["id"])
 
 
 @websocket_api.websocket_command(

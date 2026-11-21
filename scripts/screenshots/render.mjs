@@ -78,6 +78,12 @@ const failed = async (page) => {
   await page.locator("notification-journal-record").nth(2).waitFor({ state: "detached" });
   await group(page);
 };
+const sendTo = async (page) => {
+  await page.locator(".send-to").first().click();
+  await page.waitForSelector("notification-journal-send dialog[open] fieldset");
+  await page.locator("notification-journal-send label.option", { hasText: "Sam's phone" }).click();
+  await page.locator("notification-journal-send label.option", { hasText: "Kitchen speaker" }).click();
+};
 const statistics = async (page) => {
   await page.locator('button[title="Statistics"]').click();
   await page.waitForSelector("notification-journal-statistics .stats");
@@ -93,11 +99,12 @@ for (const theme of ["light", "dark"]) {
   await shot(`timeline-${theme}`, query, { width: 1280, height: 1250 }, group);
   await shot(`automations-${theme}`, query, { width: 1280, height: 1100 }, byOrigin);
   await shot(`failed-${theme}`, query, { width: 1280, height: 900 }, failed);
+  await shot(`send-${theme}`, query, { width: 1280, height: 1000 }, sendTo, null);
   await shot(`statistics-${theme}`, query, { width: 1280, height: 1400 }, statistics, statisticsEnd);
   await shot(`mobile-${theme}`, `${query}&narrow=1`, { width: 390, height: 844 }, async () => {}, null);
 
   await frame(`hero-nordic-${theme}`, `theme=${theme}&layout=hero&a=timeline-${theme}&b=mobile-${theme}`);
-  for (const view of ["timeline", "automations", "failed", "statistics"]) {
+  for (const view of ["timeline", "automations", "failed", "send", "statistics"]) {
     await frame(`${view}-nordic-${theme}`, `theme=${theme}&layout=window&a=${view}-${theme}`);
   }
 }

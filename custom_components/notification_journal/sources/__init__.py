@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID, ATTR_FLOOR_ID, ATTR_LABEL_ID
@@ -17,6 +19,28 @@ ATTR_MESSAGE = "message"
 ATTR_TITLE = "title"
 TARGET_KEYS = (ATTR_ENTITY_ID, ATTR_DEVICE_ID, ATTR_AREA_ID, ATTR_FLOOR_ID, ATTR_LABEL_ID)
 """The keys of a service call's target."""
+
+
+@dataclass(slots=True)
+class Resend:
+    """A notification sent again in a call's context, and the record that call made."""
+
+    record_id: str
+    sent: str | None = None
+
+
+_resends: dict[str, Resend] = {}
+
+
+@contextmanager
+def sending_again(context_id: str, record_id: str) -> Iterator[Resend]:
+    """Record what a call in this context sends as sending a notification again, whichever source records it."""
+    _resends[context_id] = entry = Resend(record_id)
+    try:
+        yield entry
+    finally:
+        _resends.pop(context_id, None)
+
 
 type Listener = tuple[str, Callable[[Event], Any], Callable[[dict[str, Any]], bool] | None]
 """An event type, the handler and the filter of its data, as for `hass.bus.async_listen`."""
@@ -49,7 +73,7 @@ def new_record(
     `fields` are the remaining fields of the record: source, channel, message, recipients and optionally title, group.
     """
     fields.setdefault("title", None)
-    return NotificationRecord(
+    record = NotificationRecord(
         id=ulid_now(),
         time=event.time_fired,
         data=plain(data) if data else None,
@@ -57,3 +81,6 @@ def new_record(
         context_id=event.context.id,
         **fields,
     )
+    if (again := _resends.get(event.context.id)) is not None:
+        record.resent_from, again.sent = again.record_id, record.id
+    return record

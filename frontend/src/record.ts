@@ -5,32 +5,33 @@ import { channelLabel, type Clock, dateTimeText, dayKey, initials, shortDateTime
 import {
   icon,
   mdiAccountGroupOutline,
-  mdiAccountOutline,
   mdiAccountMultipleOutline,
+  mdiAccountOutline,
   mdiAlertCircleOutline,
   mdiAlertOutline,
   mdiBellCheckOutline,
-  mdiBellRemoveOutline,
   mdiBellOutline,
+  mdiBellRemoveOutline,
   mdiBullhornOutline,
   mdiCellphone,
   mdiChatOutline,
   mdiCheck,
   mdiCheckAll,
-  mdiChevronDown,
   mdiCheckboxBlankCircleOutline,
   mdiCheckCircle,
+  mdiChevronDown,
   mdiClose,
   mdiHelpCircleOutline,
   mdiHomeAssistant,
   mdiImageOffOutline,
   mdiOpenInNew,
   mdiPlay,
-  mdiReplay,
   mdiPuzzleOutline,
+  mdiReplay,
   mdiRobotOutline,
   mdiScriptTextOutline,
   mdiSendCheckOutline,
+  mdiSendOutline,
   mdiSpeaker,
   mdiSwapHorizontal,
   mdiTagOutline,
@@ -198,6 +199,7 @@ export class NotificationJournalRecord extends LitElement {
     _sources: { state: true },
     sign: { attribute: false },
     resend: { attribute: false },
+    sendTo: { attribute: false },
     _resend: { state: true },
     selectable: { type: Boolean },
     selected: { type: Boolean },
@@ -220,6 +222,8 @@ export class NotificationJournalRecord extends LitElement {
   declare sign: Signer | undefined;
   /** Sends a failed notification again; only given to administrators. */
   declare resend: ((recordId: string) => Promise<unknown>) | undefined;
+  /** Opens the dialog that sends the notification to targets to pick; only given to administrators. */
+  declare sendTo: ((record: NotificationRecord) => void) | undefined;
   declare _resend: "sending" | "sent" | { error: string } | undefined;
   private _found: Media = {};
   private _frame: Element | undefined;
@@ -298,13 +302,22 @@ export class NotificationJournalRecord extends LitElement {
             <div class="chips">${this._origin()} ${this._route()} ${this._tag()}</div>
             ${this._calls ? this._innerCalls() : nothing} ${this._details ? this._detailList() : nothing}
           </div>
-          <button
-            class="more ${this._details ? "open" : ""}"
-            aria-expanded=${this._details ? "true" : "false"}
-            @click=${() => (this._details = !this._details)}
-          >
-            ${localize(this._details ? "hide_details" : "show_details")}${icon(mdiChevronDown)}
-          </button>
+          <div class="footer">
+            ${
+              this.sendTo
+                ? html`<button class="more send-to" @click=${() => this.sendTo!(record)}>
+                    ${icon(mdiSendOutline)}${localize("send_to")}
+                  </button>`
+                : nothing
+            }
+            <button
+              class="more ${this._details ? "open" : ""}"
+              aria-expanded=${this._details ? "true" : "false"}
+              @click=${() => (this._details = !this._details)}
+            >
+              ${localize(this._details ? "hide_details" : "show_details")}${icon(mdiChevronDown)}
+            </button>
+          </div>
         </div>
       </article>
       ${this._viewing ? this._viewer() : nothing}
@@ -1324,6 +1337,18 @@ export class NotificationJournalRecord extends LitElement {
       }
       .more.open .icon {
         transform: rotate(180deg);
+      }
+      .footer {
+        display: flex;
+        align-items: center;
+      }
+      .more.send-to {
+        gap: 4px;
+        margin-left: 0;
+      }
+      .send-to .icon {
+        width: 16px;
+        height: 16px;
       }
       button:focus-visible,
       a:focus-visible {
