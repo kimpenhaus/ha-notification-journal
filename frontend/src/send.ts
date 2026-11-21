@@ -6,7 +6,7 @@ import { countText, type Localize } from "./localize";
 import { spokenText } from "./media";
 import { controlStyles } from "./styles";
 import type { HassConnection, NotificationRecord } from "./types";
-import { errorMessage } from "./util";
+import { errorMessage, showWhenReady } from "./util";
 
 /** What a notification can be sent to, as `notification_journal/targets` lists it. */
 export interface Targets {
@@ -15,6 +15,8 @@ export interface Targets {
   engines: Named[];
   speak: Named[];
   announce: Named[];
+  /** Whether the Companion app's actions get the notification's image, buttons and tag too. */
+  same_medium: boolean;
 }
 
 interface Named {
@@ -65,7 +67,10 @@ export class NotificationJournalSend extends LitElement {
 
   private async _load(): Promise<void> {
     try {
-      const targets = await this.connection.sendMessagePromise<Targets>({ type: "notification_journal/targets" });
+      const targets = await this.connection.sendMessagePromise<Targets>({
+        type: "notification_journal/targets",
+        record_id: this.record.id,
+      });
       this._targets = targets;
       this._engine = targets.engines[0]?.entity_id ?? "";
     } catch (error) {
@@ -73,27 +78,11 @@ export class NotificationJournalSend extends LitElement {
     }
   }
 
-  /** Whether the notification went through the Companion app, so its actions get image, buttons and tag again. */
-  private get _sameMedium(): boolean {
-    const record = this.record;
-    const companion = new Set(
-      (this._targets?.notify_action ?? [])
-        .filter((action) => action.companion)
-        .map((action) => `notify.${action.service}`),
-    );
-    const reached = [...record.channel.split(", "), ...record.inner_calls.map((call) => call.channel)];
-    return record.source === "notify" && reached.some((channel) => companion.has(channel));
-  }
-
-  private get _chosenTargets(): Target[] {
-    const found: Target[] = [];
-    for (const key of this._chosen.keys()) {
-      const [kind, id] = key.split(" ", 2) as [Target["kind"], string];
-      if (kind === "notify_action") found.push({ kind, service: id });
-      else if (kind === "speak") found.push({ kind, engine: this._engine, entity_id: id });
-      else found.push({ kind, entity_id: id });
-    }
-    return found;
+  private _target(key: string): Target {
+    const [kind, id] = key.split(" ", 2) as [Target["kind"], string];
+    if (kind === "notify_action") return { kind, service: id };
+    if (kind === "speak") return { kind, engine: this._engine, entity_id: id };
+    return { kind, entity_id: id };
   }
 
   override render(): TemplateResult {
@@ -127,7 +116,7 @@ export class NotificationJournalSend extends LitElement {
       <div class="sections">
         ${this._section(
           localize("send_companion"),
-          localize(this._sameMedium ? "send_receives_all" : "send_receives_titled"),
+          localize(targets.same_medium ? "send_receives_all" : "send_receives_titled"),
           byAction(companion),
         )}
         ${this._section(localize("send_notify"), localize("send_receives_titled"), [
@@ -156,7 +145,7 @@ export class NotificationJournalSend extends LitElement {
       </div>
       <footer>
         <button class="text-button" @click=${this._close}>${localize("cancel")}</button>
-        <button class="primary" ?disabled=${!this._chosen.size} @click=${() => (this._step = "confirm")}>
+        <button class="primary-button" ?disabled=${!this._chosen.size} @click=${() => (this._step = "confirm")}>
           ${localize("send_next")}
         </button>
       </footer>
@@ -200,8 +189,8 @@ export class NotificationJournalSend extends LitElement {
         <button class="text-button" ?disabled=${sending} @click=${() => (this._step = "choose")}>
           ${localize("back")}
         </button>
-        <button class="primary" ?disabled=${sending} @click=${this._send}>
-          ${localize(sending ? "sending" : "send")}
+        <button class="primary-button" ?disabled=${sending} @click=${this._send}>
+          ${localize(sending ? "resending" : "send")}
         </button>
       </footer>
     `;
@@ -217,24 +206,34 @@ export class NotificationJournalSend extends LitElement {
   private readonly _send = async (): Promise<void> => {
     this._step = "sending";
     this._error = undefined;
+    const chosen = [...this._chosen];
     try {
-      await this.connection.sendMessagePromise({
+      const { errors } = await this.connection.sendMessagePromise<{ errors: (string | null)[] }>({
         type: "notification_journal/send",
         record_id: this.record.id,
-        targets: this._chosenTargets,
+        targets: chosen.map(([key]) => this._target(key)),
       });
-      this._finish(countText(this.localize, this._chosen.size, "sent_to_one", "sent_to"));
+      const failed = chosen.flatMap((entry, index) => (errors[index] ? [{ entry, error: errors[index] }] : []));
+      if (!failed.length) {
+        this._finish(countText(this.localize, chosen.length, "sent_to_one", "sent_to"));
+        return;
+      }
+      this._chosen = new Map(failed.map(({ entry }) => entry));
+      const message = failed.map(({ entry: [, name], error }) => `${name}: ${error}`);
+      this._error = this.localize("send_failed", { message: message.join("; ") });
+      this._step = "confirm";
     } catch (error) {
       this._error = this.localize("send_failed", { message: errorMessage(error) });
       this._step = "confirm";
     }
   };
 
+  private _dialog: HTMLDialogElement | undefined;
+
   private readonly _open = (element: Element | undefined): void => {
     if (element instanceof HTMLDialogElement) {
-      void this.updateComplete.then(() => {
-        if (element.isConnected && !element.open) element.showModal();
-      });
+      this._dialog = element;
+      showWhenReady(this, element);
     }
   };
 
@@ -246,7 +245,11 @@ export class NotificationJournalSend extends LitElement {
     if (this._step !== "sending") this._finish(undefined);
   };
 
-  private readonly _closed = (): void => this._finish(undefined);
+  /** A dialog closed while sending opens again, so its result is not lost. */
+  private readonly _closed = (): void => {
+    if (this._step === "sending" && this._dialog) showWhenReady(this, this._dialog);
+    else this._finish(undefined);
+  };
 
   private _finish(notice: string | undefined): void {
     this.dispatchEvent(new CustomEvent("send-done", { detail: { notice }, bubbles: true, composed: true }));
@@ -268,7 +271,7 @@ export class NotificationJournalSend extends LitElement {
       }
       dialog::backdrop {
         backdrop-filter: var(--ha-dialog-scrim-backdrop-filter, var(--dialog-backdrop-filter, none));
-        background-color: var(--mdc-dialog-scrim-color, rgba(0, 0, 0, 0.32));
+        background-color: var(--mdc-dialog-scrim-color, none);
       }
       header {
         display: flex;
@@ -323,29 +326,6 @@ export class NotificationJournalSend extends LitElement {
         justify-content: flex-end;
         gap: 8px;
         margin-top: 16px;
-      }
-      .text-button,
-      .primary {
-        padding: 8px 16px;
-        border: none;
-        border-radius: 18px;
-        font: inherit;
-        font-size: 0.875rem;
-        font-weight: 500;
-        cursor: pointer;
-      }
-      .text-button {
-        background: none;
-        color: var(--primary-color);
-      }
-      .primary {
-        background: var(--primary-color);
-        color: var(--text-primary-color);
-      }
-      .text-button[disabled],
-      .primary[disabled] {
-        opacity: 0.5;
-        cursor: default;
       }
       .chosen {
         margin: 0;

@@ -26,7 +26,7 @@ NOT_A_TARGET = {SEND_MESSAGE, "persistent_notification"}
 
 TARGET = vol.Any(
     {vol.Required("kind"): NOTIFY_ENTITY, vol.Required("entity_id"): cv.entity_domain(NOTIFY_DOMAIN)},
-    {vol.Required("kind"): NOTIFY_ACTION, vol.Required("service"): cv.slug},
+    {vol.Required("kind"): NOTIFY_ACTION, vol.Required("service"): vol.All(cv.slug, vol.NotIn(NOT_A_TARGET))},
     {
         vol.Required("kind"): SPEAK,
         vol.Required("engine"): cv.entity_domain(TTS_DOMAIN),
@@ -45,8 +45,9 @@ class SendCall:
     data: dict[str, Any]
 
 
-def targets(hass: HomeAssistant) -> dict[str, list[dict[str, Any]]]:
-    """What a notification can be sent to, by kind, each named as Home Assistant shows it."""
+def targets(hass: HomeAssistant, record: NotificationRecord | None) -> dict[str, Any]:
+    """What a notification can be sent to, by kind, each named as Home Assistant shows it, and whether the Companion
+    app's actions get the notification's data too."""
     companion = companion_channels(hass)
     actions = sorted(
         service for service in hass.services.async_services_for_domain(NOTIFY_DOMAIN) if service not in NOT_A_TARGET
@@ -57,29 +58,40 @@ def targets(hass: HomeAssistant) -> dict[str, list[dict[str, Any]]]:
         "engines": _entities(hass, TTS_DOMAIN),
         SPEAK: _entities(hass, MEDIA_PLAYER_DOMAIN),
         ANNOUNCE: _entities(hass, SATELLITE_DOMAIN),
+        "same_medium": record is not None and same_medium(hass, record),
     }
+
+
+def same_medium(hass: HomeAssistant, record: NotificationRecord) -> bool:
+    """Whether a notification went through the Companion app, so its actions get image, buttons and tag again."""
+    return record.source == NOTIFY_DOMAIN and bool(companion_channels(hass) & record.devices)
+
+
+def titled(record: NotificationRecord, message: str) -> dict[str, Any]:
+    """The message of a notify call, with the notification's title if it has one."""
+    return {ATTR_MESSAGE: message, **({ATTR_TITLE: record.title} if record.title else {})}
 
 
 def calls(hass: HomeAssistant, record: NotificationRecord, chosen: list[dict[str, Any]]) -> list[SendCall]:
     """The calls that send a notification to each chosen target: text only, except a Companion app action for a
     notification that went through the Companion app, which keeps its data (image, buttons, tag)."""
     companion = companion_channels(hass)
-    reached = {*record.channels, *(call.channel for call in record.inner_calls)}
-    same_medium = record.source == NOTIFY_DOMAIN and bool(companion.intersection(reached))
+    with_data = same_medium(hass, record)
     text = record.spoken_text or record.message
-    titled = {ATTR_MESSAGE: text, **({ATTR_TITLE: record.title} if record.title else {})}
     found = []
     for target in chosen:
         kind = target["kind"]
         if kind == NOTIFY_ENTITY:
-            found.append(SendCall(NOTIFY_DOMAIN, SEND_MESSAGE, {**titled, ATTR_ENTITY_ID: target["entity_id"]}))
+            found.append(
+                SendCall(NOTIFY_DOMAIN, SEND_MESSAGE, {**titled(record, text), ATTR_ENTITY_ID: target["entity_id"]})
+            )
         elif kind == NOTIFY_ACTION:
             service = target["service"]
-            if same_medium and f"{NOTIFY_DOMAIN}.{service}" in companion:
-                data = {ATTR_MESSAGE: record.message, **({ATTR_TITLE: record.title} if record.title else {})}
-                found.append(SendCall(NOTIFY_DOMAIN, service, {**data, **deepcopy(record.data or {})}))
+            if with_data and f"{NOTIFY_DOMAIN}.{service}" in companion:
+                data = {**titled(record, record.message), **deepcopy(record.data or {})}
+                found.append(SendCall(NOTIFY_DOMAIN, service, data))
             else:
-                found.append(SendCall(NOTIFY_DOMAIN, service, titled))
+                found.append(SendCall(NOTIFY_DOMAIN, service, titled(record, text)))
         elif kind == SPEAK:
             data = {ATTR_ENTITY_ID: target["engine"], ATTR_MEDIA_PLAYERS: target["entity_id"], ATTR_MESSAGE: text}
             found.append(SendCall(TTS_DOMAIN, "speak", data))

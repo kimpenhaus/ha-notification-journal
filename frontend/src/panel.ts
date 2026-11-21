@@ -1408,31 +1408,6 @@ export class NotificationJournalPanel extends LitElement {
       color: var(--secondary-text-color);
       font-size: 0.875rem;
     }
-    .text-button {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 10px;
-      border: none;
-      border-radius: 6px;
-      background: none;
-      color: var(--primary-color);
-      font: inherit;
-      font-size: 0.875rem;
-      font-weight: 500;
-      cursor: pointer;
-    }
-    .text-button .icon {
-      width: 18px;
-      height: 18px;
-    }
-    .text-button:hover {
-      background: color-mix(in srgb, var(--primary-color) 10%, transparent);
-    }
-    .text-button[disabled] {
-      color: var(--disabled-text-color);
-      cursor: default;
-    }
     .export {
       display: inline-flex;
       align-items: center;

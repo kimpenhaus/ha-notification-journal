@@ -112,7 +112,7 @@ Administrators can send a failed or partly failed notification again with *Send 
 | Media players, through `tts.speak` with a text-to-speech service to choose | the message, spoken |
 | Voice satellites, through `assist_satellite.announce` | the message, announced |
 
-A notification the Companion app spoke (`message: TTS`) goes out as its text. Every send is recorded like *Send again*.
+A notification the Companion app spoke (`message: TTS`) goes out as its text; a command to the Companion app (`clear_notification`, `request_location_update` and the like) is not sent again. All targets are sent to at once; when some fail, the dialog keeps only those, with their errors, to try again. Every send is recorded like *Send again*, except to a target the journal does not record (*Do not record*).
 
 Failed pushes of the Companion app are read from what it logs at *warning* and above; with its log level set higher (`logger:` in `configuration.yaml`), they stay *sent*.
 

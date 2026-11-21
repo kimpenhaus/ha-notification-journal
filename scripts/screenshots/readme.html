@@ -61,8 +61,13 @@
           async sendMessagePromise(m) {
             if (m.type === "auth/sign_path") return { path: m.path };
             if (m.type.endsWith("/facets")) return facets;
-            if (m.type.endsWith("/targets")) return window.README_TARGETS;
-            if (m.type.endsWith("/send")) return null;
+            if (m.type.endsWith("/targets")) {
+              const record = records.find((r) => r.id === m.record_id);
+              const reached = record ? [record.channel, ...record.inner_calls.map((call) => call.channel)] : [];
+              const same_medium = record?.source === "notify" && reached.some((channel) => channel.startsWith("notify.mobile_app_"));
+              return { ...window.README_TARGETS, same_medium };
+            }
+            if (m.type.endsWith("/send")) return { errors: m.targets.map(() => null) };
             if (m.type.endsWith("/statistics")) return statistics(m);
             if (m.type.endsWith("/archive")) { for (const id of m.record_ids) m.archived === false ? archive.delete(id) : archive.add(id); return { changed: m.record_ids.length }; }
             if (m.type.endsWith("/delete")) { const i = records.findIndex((r) => r.id === m.record_id); records.splice(i, 1); return null; }

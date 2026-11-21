@@ -51,7 +51,7 @@ import {
   spokenText,
 } from "./media";
 import { controlStyles, surface } from "./styles";
-import { errorMessage } from "./util";
+import { errorMessage, showWhenReady } from "./util";
 import type { Answer, NotificationRecord, Origin, OriginKind, Recipient, Status } from "./types";
 
 const BELL = "persistent_notification";
@@ -469,9 +469,7 @@ export class NotificationJournalRecord extends LitElement {
       this._viewing = false;
       return;
     }
-    void this.updateComplete.then(() => {
-      if (element.isConnected && !element.open) element.showModal();
-    });
+    showWhenReady(this, element);
   };
 
   private _video(address: string, poster: string | undefined): TemplateResult | typeof nothing {

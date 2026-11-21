@@ -57,6 +57,12 @@ PREFIXED_COMMAND = re.compile(r"(command|kiosk)_[a-z_]+")
 """The commands of the Companion app on Android (`command_*`) and in kiosk mode on iOS (`kiosk_*`)."""
 
 
+def is_command(message: str) -> bool:
+    """Whether a message makes the Companion app do something, withdrawing a notification included, instead of showing
+    one."""
+    return message == CLEAR_NOTIFICATION or message in COMMANDS or PREFIXED_COMMAND.fullmatch(message) is not None
+
+
 @dataclass(frozen=True, slots=True)
 class _GroupCall:
     record_id: str | None

@@ -152,11 +152,17 @@ async def test_a_target_that_fails_fails_its_notification(
     runtime = await _setup(hass)
     original = await _companion_notification(hass, runtime)
 
-    result = await _send(await hass_ws_client(hass), original.id, {"kind": "notify_action", "service": "broken"})
+    _service(hass, "notify", "mobile_app_ben")
+    targets = [{"kind": "notify_action", "service": "broken"}, {"kind": "notify_action", "service": "mobile_app_ben"}]
 
-    assert result["error"]["message"] == "Push server unreachable"
-    _, again = await _records(hass, runtime)
-    assert (again.status, again.error, again.resent_from) == (Status.FAILED, "Push server unreachable", original.id)
+    result = await _send(await hass_ws_client(hass), original.id, *targets)
+
+    assert result["result"] == {"errors": ["Push server unreachable", None]}
+    statuses = {record.channel: (record.status, record.error) for record in (await _records(hass, runtime))[1:]}
+    assert statuses == {
+        "notify.broken": (Status.FAILED, "Push server unreachable"),
+        "notify.mobile_app_ben": (Status.SENT, None),
+    }
 
 
 async def test_only_administrators_send(
@@ -187,8 +193,56 @@ async def test_the_targets_are_listed_by_kind(hass: HomeAssistant, hass_ws_clien
         await client.send_json_auto_id({"type": f"{DOMAIN}/targets"})
         result = (await client.receive_json())["result"]
 
+    assert result["same_medium"] is False
     assert result["notify_entity"] == [{"entity_id": "notify.kitchen_display", "name": "Kitchen display"}]
     assert result["notify_action"] == [{"service": "mobile_app_anna", "name": "mobile_app_anna", "companion": True}]
     assert result["engines"] == [{"entity_id": "tts.cloud", "name": "Cloud"}]
     assert result["speak"] == [{"entity_id": "media_player.kitchen", "name": "Kitchen speaker"}]
     assert result["announce"] == [{"entity_id": "assist_satellite.office", "name": "Office satellite"}]
+
+
+async def test_the_targets_say_whether_the_companion_app_gets_the_data(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+) -> None:
+    _service(hass, "notify", "mobile_app_anna")
+    runtime = await _setup(hass)
+    client = await hass_ws_client(hass)
+    with patch.object(send, "companion_channels", return_value=COMPANION):
+        original = await _companion_notification(hass, runtime)
+        await client.send_json_auto_id({"type": f"{DOMAIN}/targets", "record_id": original.id})
+        result = (await client.receive_json())["result"]
+
+    assert result["same_medium"] is True
+
+
+async def test_the_bell_and_send_message_are_no_targets(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+) -> None:
+    _service(hass, "notify", "mobile_app_anna")
+    bell = _service(hass, "notify", "persistent_notification")
+    runtime = await _setup(hass)
+    original = await _companion_notification(hass, runtime)
+
+    result = await _send(
+        await hass_ws_client(hass), original.id, {"kind": "notify_action", "service": "persistent_notification"}
+    )
+
+    assert result["error"]["code"] == "invalid_format"
+    assert bell == []
+
+
+async def test_a_command_to_the_companion_app_is_not_sent_again(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+) -> None:
+    _service(hass, "notify", "telegram")
+    display = _service(hass, "notify", "send_message")
+    runtime = await _setup(hass)
+    await hass.services.async_call("notify", "telegram", {"message": "clear_notification"}, blocking=True)
+    [original] = await _records(hass, runtime)
+
+    result = await _send(
+        await hass_ws_client(hass), original.id, {"kind": "notify_entity", "entity_id": "notify.kitchen_display"}
+    )
+
+    assert result["error"]["code"] == "not_supported"
+    assert display == []
