@@ -34,14 +34,15 @@ const NUMBER_FORMAT_LOCALES: Record<string, string | undefined> = {
   decimal_comma: "de",
   space_comma: "fr",
   quote_decimal: "de-CH",
+  none: "en-US",
   system: undefined,
 };
 
 /** Whether numbers are written with a decimal comma for this user, as their profile's number format says. */
 export function decimalComma(language: string, numberFormat: string | undefined): boolean {
-  const locale = numberFormat && numberFormat in NUMBER_FORMAT_LOCALES ? NUMBER_FORMAT_LOCALES[numberFormat] : language;
-  const parts = new Intl.NumberFormat(locale).formatToParts(1.5);
-  return parts.find((part) => part.type === "decimal")?.value === ",";
+  const locale =
+    numberFormat && Object.hasOwn(NUMBER_FORMAT_LOCALES, numberFormat) ? NUMBER_FORMAT_LOCALES[numberFormat] : language;
+  return new Intl.NumberFormat(locale).format(1.5).includes(",");
 }
 
 /** A share in whole percent, or a dash without a total. */
